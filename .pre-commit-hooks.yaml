@@ -1,0 +1,6 @@
+- id: check-max-lines
+  name: check max lines
+  description: Fail when a Python file or function exceeds a code-line limit.
+  entry: pymaxlines
+  language: python
+  types_or: [python, pyi]
