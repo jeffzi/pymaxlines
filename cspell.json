@@ -5,6 +5,7 @@
   "files": ["**/*.{py,pyi,md,yml,yaml,toml,json,jsonc}"],
   "words": [
     "addopts",
+    "capsys",
     "conftest",
     "docstrings",
     "filterwarnings",
