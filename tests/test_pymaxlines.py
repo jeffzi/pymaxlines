@@ -12,16 +12,19 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+_CODE_LINE = "x = 1\n"
+_INDENTED_CODE_LINE = "    x = 1\n"
+
 
 def _write_code_lines(path: Path, count: int) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("x = 1\n" * count)
+    path.write_text(_CODE_LINE * count)
     return path
 
 
 def _write_function(path: Path, code_lines: int) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("def big():\n" + "    x = 1\n" * (code_lines - 1))
+    path.write_text("def big():\n" + _INDENTED_CODE_LINE * (code_lines - 1))
     return path
 
 
@@ -91,19 +94,19 @@ def test_main_when_over_limit_does_report_path_count_and_limit(
             id="comments-and-blanks",
         ),
         pytest.param(
-            "x = 1\n" * (MAX_LINES_SRC - 4) + 's = """\na\n\nb\n"""\n',
+            _CODE_LINE * (MAX_LINES_SRC - 4) + 's = """\na\n\nb\n"""\n',
             id="blank-in-multiline-string",
         ),
         pytest.param(
-            '"""Module\ndocstring\nhere."""\n' + "x = 1\n" * MAX_LINES_SRC,
+            '"""Module\ndocstring\nhere."""\n' + _CODE_LINE * MAX_LINES_SRC,
             id="module-docstring",
         ),
         pytest.param(
-            'class C:\n    """Docstring."""\n' + "    x = 1\n" * (MAX_LINES_SRC - 1),
+            'class C:\n    """Docstring."""\n' + _INDENTED_CODE_LINE * (MAX_LINES_SRC - 1),
             id="class-docstring",
         ),
         pytest.param(
-            '"""First.\n\nThird.\n"""\n' + "x = 1\n" * MAX_LINES_SRC,
+            '"""First.\n\nThird.\n"""\n' + _CODE_LINE * MAX_LINES_SRC,
             id="docstring-with-blank-lines",
         ),
     ],
@@ -128,7 +131,7 @@ def test_main_when_multiline_string_present_does_count_every_line(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], tail: str
 ) -> None:
     file = tmp_path / "module.py"
-    file.write_text("x = 1\n" * (MAX_LINES_SRC - 2) + tail)
+    file.write_text(_CODE_LINE * (MAX_LINES_SRC - 2) + tail)
 
     exit_code = main([str(file)])
 
@@ -255,12 +258,12 @@ def test_main_when_function_exceeds_limit_does_report_name_line_and_count(
     "content",
     [
         pytest.param(
-            "def big():\n    # comment\n\n" + "    x = 1\n" * (MAX_LINES_PER_FUNCTION - 1),
+            "def big():\n    # comment\n\n" + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
             id="comments-and-blanks",
         ),
         pytest.param(
             'def big():\n    """Function\n    docstring\n    here."""\n'
-            + "    x = 1\n" * (MAX_LINES_PER_FUNCTION - 1),
+            + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
             id="function-docstring",
         ),
     ],
@@ -297,6 +300,99 @@ def test_main_when_function_limit_flags_vary_does_gate_the_check(
     exit_code = main([*argv_prefix, str(file)])
 
     assert exit_code == expected_exit
+
+
+# ---------------------------------------------------------------------------
+# main — skip-* toggle flags (file-level)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("flag", "content"),
+    [
+        pytest.param(
+            "--no-skip-blank-lines",
+            "x = 1\n\n" * 5 + _CODE_LINE * (MAX_LINES_SRC - 5),
+            id="blank-lines",
+        ),
+        pytest.param(
+            "--no-skip-comments",
+            "# comment\n" * 5 + _CODE_LINE * MAX_LINES_SRC,
+            id="comment-lines",
+        ),
+        pytest.param(
+            "--no-skip-docstrings",
+            '"""Module\ndocstring\nhere."""\n' + _CODE_LINE * MAX_LINES_SRC,
+            id="docstring-lines",
+        ),
+    ],
+)
+def test_main_when_no_skip_flag_given_does_count_non_code_content(
+    tmp_path: Path, flag: str, content: str
+) -> None:
+    file = tmp_path / "module.py"
+    file.write_text(content)
+
+    exit_code = main([flag, str(file)])
+
+    assert exit_code == 1
+
+
+def test_main_when_all_no_skip_flags_given_does_count_every_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    content = '"""Docstring."""\n# comment\n\n' + _CODE_LINE * MAX_LINES_SRC
+    file = tmp_path / "module.py"
+    file.write_text(content)
+
+    exit_code = main(
+        [
+            "--no-skip-blank-lines",
+            "--no-skip-comments",
+            "--no-skip-docstrings",
+            str(file),
+        ]
+    )
+
+    assert exit_code == 1
+    assert f"{MAX_LINES_SRC + 3} code lines (max {MAX_LINES_SRC})" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# main — skip-* toggle flags (per-function)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("flag", "content"),
+    [
+        pytest.param(
+            "--no-skip-blank-lines",
+            "def big():\n\n\n" + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
+            id="blank-lines",
+        ),
+        pytest.param(
+            "--no-skip-comments",
+            "def big():\n    # a\n    # b\n" + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
+            id="comment-lines",
+        ),
+        pytest.param(
+            "--no-skip-docstrings",
+            'def big():\n    """Function\n    docstring."""\n'
+            + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
+            id="docstring-lines",
+        ),
+    ],
+)
+def test_main_when_no_skip_flag_given_does_count_non_code_in_function(
+    tmp_path: Path, flag: str, content: str
+) -> None:
+    file = tmp_path / "module.py"
+    file.write_text(content)
+
+    exit_code = main([flag, str(file)])
+
+    assert exit_code == 1
 
 
 # ---------------------------------------------------------------------------

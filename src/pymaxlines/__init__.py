@@ -1,9 +1,9 @@
 """Fail when a Python file or function exceeds a code-line limit.
 
-Counts lines the way oxlint's ``max-lines`` does with ``skipBlankLines`` and
-``skipComments``: blank lines, comment-only lines, and standalone docstrings
-are free — including whitespace-only lines inside multi-line strings; every
-other line touched by a token (code, strings) counts once.
+By default, blank lines, comment-only lines, and standalone docstrings are
+free — matching oxlint's ``max-lines`` with ``skipBlankLines`` and
+``skipComments``. Each category can be counted via ``--no-skip-blank-lines``,
+``--no-skip-comments``, or ``--no-skip-docstrings``.
 
 Two checks per file, mirroring oxlint's size rules:
 
@@ -51,6 +51,9 @@ class _Config:
     max_lines_test: int
     max_lines_per_function: int
     max_lines_per_function_test: int
+    skip_blank_lines: bool
+    skip_comments: bool
+    skip_docstrings: bool
 
 
 _NON_CODE_TOKENS = frozenset(
@@ -68,14 +71,16 @@ _DOCSTRING_CONTAINERS = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFun
 
 
 def _docstring_lines(tree: ast.Module) -> set[int]:
-    """Return line numbers occupied by standalone docstrings.
+    """A docstring is a bare ``ast.Expr(value=ast.Constant(str))``.
 
-    A docstring is a bare ``ast.Expr(value=ast.Constant(str))`` that is the
-    first statement in a module, class, or function/async-function body.
+    Specifically, it is the first statement in a module, class, or
+    function/async-function body.
     """
     lines: set[int] = set()
     for node in ast.walk(tree):
         if not isinstance(node, _DOCSTRING_CONTAINERS):
+            continue
+        if not node.body:
             continue
         first = node.body[0]
         if (
@@ -87,29 +92,62 @@ def _docstring_lines(tree: ast.Module) -> set[int]:
     return lines
 
 
-def _code_line_numbers(source: str, tree: ast.Module) -> set[int]:
-    lines = source.splitlines()
-    touched: set[int] = set()
+def _comment_only_lines(source: str) -> set[int]:
+    """A line is comment-only when it has a COMMENT token but no code token.
+
+    The comparison is per-line: a line with both a comment and a code token is
+    not comment-only.
+    """
+    comment_lines: set[int] = set()
+    code_lines: set[int] = set()
     for token in tokenize.generate_tokens(io.StringIO(source).readline):
-        if token.type in _NON_CODE_TOKENS:
-            continue
-        touched.update(range(token.start[0], token.end[0] + 1))
-    docstrings = _docstring_lines(tree)
-    return {number for number in touched if lines[number - 1].strip()} - docstrings
+        if token.type == tokenize.COMMENT:
+            comment_lines.add(token.start[0])
+        elif token.type not in _NON_CODE_TOKENS:
+            code_lines.update(range(token.start[0], token.end[0] + 1))
+    return comment_lines - code_lines
+
+
+def _code_line_numbers(
+    source: str,
+    tree: ast.Module,
+    *,
+    skip_blank_lines: bool = True,
+    skip_comments: bool = True,
+    skip_docstrings: bool = True,
+) -> set[int]:
+    lines = source.splitlines()
+    all_line_numbers = set(range(1, len(lines) + 1))
+
+    skip: set[int] = set()
+    if skip_blank_lines:
+        skip.update(i for i, line in enumerate(lines, 1) if not line.strip())
+    if skip_comments:
+        skip.update(_comment_only_lines(source))
+    if skip_docstrings:
+        skip.update(_docstring_lines(tree))
+
+    return all_line_numbers - skip
+
+
+@dataclass(frozen=True, slots=True)
+class _OversizedFunction:
+    name: str
+    lineno: int
+    count: int
 
 
 def _oversized_functions(
     tree: ast.Module, code_lines: set[int], limit: int
-) -> list[tuple[str, int, int]]:
-    """Return ``(name, lineno, count)`` for each function over ``limit`` code lines."""
-    oversized: list[tuple[str, int, int]] = []
+) -> list[_OversizedFunction]:
+    oversized: list[_OversizedFunction] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         end = node.end_lineno or node.lineno
         count = sum(1 for number in code_lines if node.lineno <= number <= end)
         if count > limit:
-            oversized.append((node.name, node.lineno, count))
+            oversized.append(_OversizedFunction(node.name, node.lineno, count))
     return oversized
 
 
@@ -132,16 +170,23 @@ def _check_file(path: Path, config: _Config) -> int:
         with tokenize.open(path) as handle:
             source = handle.read()
         tree = ast.parse(source)
-        code_lines = _code_line_numbers(source, tree)
+        code_lines = _code_line_numbers(
+            source,
+            tree,
+            skip_blank_lines=config.skip_blank_lines,
+            skip_comments=config.skip_comments,
+            skip_docstrings=config.skip_docstrings,
+        )
         oversized = _oversized_functions(tree, code_lines, function_limit) if function_limit else []
     except (OSError, UnicodeDecodeError, SyntaxError, tokenize.TokenError) as exc:
         return _report(f"{path}: could not read ({exc})")
     exit_code = 0
     if len(code_lines) > file_limit:
         exit_code = _report(f"{path}: {len(code_lines)} code lines (max {file_limit})")
-    for name, line, count in oversized:
+    for func in oversized:
         exit_code = _report(
-            f"{path}:{line}: function '{name}' has {count} code lines (max {function_limit})"
+            f"{path}:{func.lineno}: function '{func.name}' has {func.count} code lines "
+            f"(max {function_limit})"
         )
     return exit_code
 
@@ -173,14 +218,26 @@ def _parse_args(argv: Sequence[str]) -> _Config:
         default=MAX_LINES_PER_FUNCTION_TEST,
         help="per-function code-line limit for test files; 0 disables (default: %(default)s)",
     )
-    ns = parser.parse_args(argv)
-    return _Config(
-        files=ns.files,
-        max_lines=ns.max_lines,
-        max_lines_test=ns.max_lines_test,
-        max_lines_per_function=ns.max_lines_per_function,
-        max_lines_per_function_test=ns.max_lines_per_function_test,
+    parser.add_argument(
+        "--skip-blank-lines",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="exclude blank lines from counts (default: %(default)s)",
     )
+    parser.add_argument(
+        "--skip-comments",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="exclude comment-only lines from counts (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--skip-docstrings",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="exclude docstring lines from counts (default: %(default)s)",
+    )
+    ns = parser.parse_args(argv)
+    return _Config(**vars(ns))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
