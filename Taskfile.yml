@@ -39,6 +39,12 @@ tasks:
     cmds:
       - uv run pytest {{if .CLI_ARGS}}--no-cov {{end}}{{.CLI_ARGS}}
 
+  test:e2e:
+    desc: Run only end-to-end tests
+    deps: [_sync]
+    cmds:
+      - uv run pytest --run-e2e -m e2e --no-cov
+
   test:matrix:
     desc: Run the test suite on every supported Python version
     deps: [_require-uv]
