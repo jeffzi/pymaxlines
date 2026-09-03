@@ -1,7 +1,7 @@
 # pymaxlines
 
 [![CI](https://github.com/jeffzi/pymaxlines/actions/workflows/pytest.yml/badge.svg)](https://github.com/jeffzi/pymaxlines/actions/workflows/pytest.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jeffzi/pymaxlines/blob/main/LICENSE)
 
 A pre-commit hook that fails when a Python file or function has too many lines of code.
 
@@ -52,13 +52,13 @@ Add the hook to `.pre-commit-config.yaml` and run `pre-commit install` or
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/jeffzi/pymaxlines
-    rev: main # pin to a release tag once one is published
+    rev: v0.3.0
     hooks:
       - id: check-max-lines
 ```
 
 [pre-commit]: https://pre-commit.com
-[prek]: https://github.com/jdx/prek
+[prek]: https://github.com/j178/prek
 
 To run it outside [pre-commit][pre-commit]:
 
@@ -121,4 +121,4 @@ runs the suite on each supported Python version.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/jeffzi/pymaxlines/blob/main/LICENSE).
