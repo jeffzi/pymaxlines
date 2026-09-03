@@ -57,7 +57,7 @@ malware-check = true
 preset = "strict"
 project-includes = ["src", "tests", "scripts"]
 python-version = "3.12"
-search-path = ["src"]
+search-path = ["src", "tests"]
 
 [tool.ruff]
 target-version = "py312"

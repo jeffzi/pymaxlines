@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+from conftest import REPO_ROOT
 
 from pymaxlines import main
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # Target repo — change these three to swap the e2e corpus.
 _REPO_TAG = "v2.12.0"
 _REPO_URL = "https://github.com/pydantic/httpx2.git"
-_REPO_DIR = Path(__file__).resolve().parent.parent / ".cache" / "e2e" / f"httpx2-{_REPO_TAG}"
+_REPO_SLUG = hashlib.sha256(f"{_REPO_URL}@{_REPO_TAG}".encode()).hexdigest()[:12]
+_REPO_DIR = REPO_ROOT / ".cache" / "e2e" / f"httpx2-{_REPO_SLUG}"
 
 _CONNECTIVITY_SIGNATURES = (
     "Could not resolve host",
@@ -56,6 +62,18 @@ def _clone_repo(git: str, target_dir: Path) -> Path:
     return target_dir
 
 
+def _origin_matches(git: str, repo_dir: Path) -> bool:
+    """Check whether *repo_dir*'s ``origin`` remote points at the pinned corpus URL."""
+    result = subprocess.run(  # noqa: S603 — all arguments are hardcoded constants
+        [git, "remote", "get-url", "origin"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() == _REPO_URL
+
+
 @pytest.fixture(scope="session")
 def e2e_checkout() -> Path:
     """Clone the target repo at a pinned tag; reuse the checkout on subsequent runs."""
@@ -63,8 +81,11 @@ def e2e_checkout() -> Path:
     if not git:
         pytest.skip("git is not available")
 
-    if _REPO_DIR.exists() and (_REPO_DIR / ".git").is_dir():
+    if _REPO_DIR.exists() and (_REPO_DIR / ".git").is_dir() and _origin_matches(git, _REPO_DIR):
         return _REPO_DIR
+
+    if _REPO_DIR.exists():
+        shutil.rmtree(_REPO_DIR)
 
     return _clone_repo(git, _REPO_DIR)
 
@@ -73,17 +94,20 @@ def e2e_checkout() -> Path:
 def e2e_py_files(e2e_checkout: Path) -> list[str]:
     """All Python files in the e2e checkout, for running pymaxlines against."""
     py_files = [str(p) for p in sorted(e2e_checkout.rglob("*.py"))]
-    assert py_files, "no .py files found in e2e checkout"
+    if not py_files:
+        pytest.fail("no .py files found in e2e checkout")
     return py_files
 
 
 @pytest.mark.e2e
 def test_pymaxlines_when_run_against_e2e_repo_does_detect_oversized_file(
-    e2e_py_files: list[str],
+    e2e_py_files: list[str], capsys: pytest.CaptureFixture[str]
 ):
     exit_code = main(e2e_py_files)
 
-    assert exit_code == 1, "expected pymaxlines to detect at least one oversized file in e2e repo"
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert any("code lines (max" in line for line in out.splitlines())
 
 
 # ---------------------------------------------------------------------------
@@ -108,11 +132,6 @@ _CONNECTIVITY_STDERR_SAMPLES = [
 ]
 
 
-def _make_clone_error(stderr: bytes) -> subprocess.CalledProcessError:
-    """Build a CalledProcessError that mimics a failed `git clone`."""
-    return subprocess.CalledProcessError(128, ["git", "clone"], output=b"", stderr=stderr)
-
-
 def _run_clone_with_fake_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stderr: bytes
 ) -> Path:
@@ -123,7 +142,7 @@ def _run_clone_with_fake_error(
     delegates to for clone + error discrimination.
     """
     target_dir = tmp_path / "clone-target"
-    error = _make_clone_error(stderr)
+    error = subprocess.CalledProcessError(128, ["git", "clone"], output=b"", stderr=stderr)
 
     def _raise(*_args: object, **_kwargs: object) -> None:
         raise error

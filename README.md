@@ -66,6 +66,9 @@ To run it outside [pre-commit][pre-commit]:
 uvx pymaxlines file1.py file2.py
 ```
 
+When the package is installed in an environment, `python -m pymaxlines` is equivalent to the
+`pymaxlines` command and lets you pick the interpreter explicitly.
+
 ## Usage
 
 The hook runs on `.py` and `.pyi` files. A file is a **test file** when the path passed on the
@@ -75,15 +78,16 @@ command line contains a `tests/` component, or the filename matches `test_*.py`,
 
 Defaults, all overridable with flags:
 
-| Flag                            | Applies to | Default | Meaning                               |
-| ------------------------------- | ---------- | ------- | ------------------------------------- |
-| `--max-lines`                   | source     | 400     | code lines per file                   |
-| `--max-lines-test`              | test       | 800     | code lines per file                   |
-| `--max-lines-per-function`      | source     | 60      | code lines per function, `0` disables |
-| `--max-lines-per-function-test` | test       | 0       | code lines per function, `0` disables |
-| `--skip-blank-lines`            | all        | True    | exclude blank lines from counts       |
-| `--skip-comments`               | all        | True    | exclude comment-only lines            |
-| `--skip-docstrings`             | all        | True    | exclude standalone docstrings         |
+| Flag                                 | Applies to | Default | Meaning                                 |
+| ------------------------------------ | ---------- | ------- | --------------------------------------- |
+| `--max-lines`                        | source     | 400     | code lines per file                     |
+| `--max-lines-test`                   | test       | 800     | code lines per file                     |
+| `--max-lines-per-function`           | source     | 60      | code lines per function, `0` disables   |
+| `--max-lines-per-function-test`      | test       | 0       | code lines per function, `0` disables   |
+| `--skip-blank-lines`                 | all        | True    | exclude blank lines from counts         |
+| `--skip-comments`                    | all        | True    | exclude comment-only lines              |
+| `--skip-docstrings`                  | all        | True    | exclude standalone docstrings           |
+| `--report-unused-disable-directives` | all        | off     | report directives that suppress nothing |
 
 Pass flags through the hook's `args`:
 
@@ -117,8 +121,8 @@ import re
 # ...
 ```
 
-**Function-level** — trail the directive on any line of the `def` signature (the `def` line through
-the closing `):`). On a decorated function, place it on the `def` line, not a decorator line:
+**Function-level** — trail the directive on any line of the `def` header, from `def` through the
+colon. On a decorated function, place it on the `def` line, not a decorator line:
 
 ```python
 def big_handler(
@@ -137,6 +141,10 @@ Separate several rules with commas: `# pymaxlines: disable=max-lines,max-lines-p
 A directive can share its `#` line with other comments:
 `def big_handler(...):  # noqa: C901  # pymaxlines: disable`.
 
+The directive prefix is lowercase `pymaxlines:` (with a colon). A wrong-case prefix
+(`PYMAXLINES:`, `PyMaxLines:`) or a missing colon (`pymaxlines disable`) is treated as a malformed
+directive and fails the run.
+
 Each rule is only valid at certain scopes:
 
 | Rule                     | Valid scopes |
@@ -147,9 +155,15 @@ Each rule is only valid at certain scopes:
 An unknown rule name, a malformed directive, or a misplaced directive fails the run with a
 diagnostic message, even when the file is within its limits. A directive is misplaced when it
 appears on a comment-only line after the module's first statement, inside a function body, or
-trailing a non-`def` statement. Naming a file-scope-only rule on a `def` line is a separate error —
+trailing a non-`def` statement (including decorator lines). Naming a file-scope-only rule on a `def`
+line is a separate error —
 `# pymaxlines: disable=max-lines` on a `def` line fails with
 `rule 'max-lines' does not apply to a function; use max-lines-per-function`.
+
+Pass `--report-unused-disable-directives` to detect directives that suppress no findings. A
+directive for a disabled check (limit 0) is reported as unused. A bare `disable` is unused only
+when neither check would have fired. Directives with validation errors are never also reported as
+unused.
 
 ### What counts as a code line
 

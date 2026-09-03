@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -14,11 +15,11 @@ import pytest
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+from conftest import CODE_LINE, INDENTED_CODE_LINE, REPO_ROOT
+
 from pymaxlines import MAX_LINES_PER_FUNCTION, MAX_LINES_SRC
 
-_HOOK_REPO = Path(__file__).resolve().parent.parent
-_CODE_LINE = "x = 1\n"
-_INDENTED_CODE_LINE = "    x = 1\n"
+_HOOK_REPO = REPO_ROOT
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -39,20 +40,16 @@ def git_repo(tmp_path: Path) -> Iterator[Path]:
     different drive (C:) than the checkout (D:), making ``os.path.relpath``
     impossible and causing exit code 3.
     """
-    if tmp_path.anchor != _HOOK_REPO.anchor:
-        td = tempfile.TemporaryDirectory(dir=_HOOK_REPO.parent)
-        work = Path(td.name)
-    else:
-        td = None
-        work = tmp_path
+    with contextlib.ExitStack() as stack:
+        if tmp_path.anchor != _HOOK_REPO.anchor:
+            work = Path(stack.enter_context(tempfile.TemporaryDirectory(dir=_HOOK_REPO.parent)))
+        else:
+            work = tmp_path
 
-    _git(work, "init")
-    _git(work, "config", "user.email", "test@test.com")
-    _git(work, "config", "user.name", "Test")
-    yield work
-
-    if td is not None:
-        td.cleanup()
+        _git(work, "init")
+        _git(work, "config", "user.email", "test@test.com")
+        _git(work, "config", "user.name", "Test")
+        yield work
 
 
 def _stage(repo: Path, name: str, content: str) -> Path:
@@ -90,38 +87,28 @@ def _run_hook(repo: Path) -> subprocess.CompletedProcess[str]:
 # ---------------------------------------------------------------------------
 
 
-def test_hook_when_file_within_limit_does_pass(git_repo: Path) -> None:
-    _stage(git_repo, "module.py", _CODE_LINE * MAX_LINES_SRC)
+def test_hook_when_files_within_limit_does_pass(git_repo: Path) -> None:
+    _stage(git_repo, "module.py", CODE_LINE * MAX_LINES_SRC)
+    _stage(git_repo, "data.txt", CODE_LINE * (MAX_LINES_SRC + 1))
 
     result = _run_hook(git_repo)
 
     assert result.returncode == 0
 
 
-def test_hook_when_file_exceeds_limit_does_fail_with_diagnostic(git_repo: Path) -> None:
-    _stage(git_repo, "module.py", _CODE_LINE * (MAX_LINES_SRC + 1))
-
-    result = _run_hook(git_repo)
-
-    assert result.returncode == 1
-    assert f"module.py: {MAX_LINES_SRC + 1} code lines (max {MAX_LINES_SRC})" in result.stdout
-
-
-def test_hook_when_function_exceeds_limit_does_fail_with_diagnostic(git_repo: Path) -> None:
-    content = "def big():\n" + _INDENTED_CODE_LINE * MAX_LINES_PER_FUNCTION
-    _stage(git_repo, "module.py", content)
-
-    result = _run_hook(git_repo)
-
-    assert result.returncode == 1
-    assert (
-        f"module.py:1: function 'big' has {MAX_LINES_PER_FUNCTION + 1} code lines" in result.stdout
+def test_hook_when_file_or_function_exceeds_limit_does_fail_with_diagnostics(
+    git_repo: Path,
+) -> None:
+    _stage(git_repo, "oversized.py", CODE_LINE * (MAX_LINES_SRC + 1))
+    _stage(
+        git_repo, "big_function.py", "def big():\n" + INDENTED_CODE_LINE * MAX_LINES_PER_FUNCTION
     )
 
-
-def test_hook_when_non_python_file_does_skip(git_repo: Path) -> None:
-    _stage(git_repo, "data.txt", _CODE_LINE * (MAX_LINES_SRC + 1))
-
     result = _run_hook(git_repo)
 
-    assert result.returncode == 0
+    assert result.returncode == 1
+    assert f"oversized.py: {MAX_LINES_SRC + 1} code lines (max {MAX_LINES_SRC})" in result.stdout
+    assert (
+        f"big_function.py:1: function 'big' has {MAX_LINES_PER_FUNCTION + 1} code lines"
+        in result.stdout
+    )

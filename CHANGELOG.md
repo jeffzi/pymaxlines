@@ -11,6 +11,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Inline `# pymaxlines: disable` comments that exempt a file or a function from the checks instead
   of raising the global limit.
+- Near-miss detection for directive comments with wrong case (`PYMAXLINES:`) or a missing colon
+  (`pymaxlines disable`), reported as malformed with the canonical form in the error message.
+- `--report-unused-disable-directives` flag to detect directives that suppress no findings.
 
 ## [0.3.0] - 2026-09-03
 

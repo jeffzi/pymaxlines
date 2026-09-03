@@ -5,6 +5,7 @@ import sys
 from typing import TYPE_CHECKING
 
 import pytest
+from conftest import CODE_LINE, INDENTED_CODE_LINE, write_module
 
 from pymaxlines import MAX_LINES_PER_FUNCTION, MAX_LINES_SRC, MAX_LINES_TEST, main
 
@@ -12,33 +13,13 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-_CODE_LINE = "x = 1\n"
-_INDENTED_CODE_LINE = "    x = 1\n"
-
-
-def _write_module(tmp_path: Path, content: str, name: str = "module.py") -> Path:
-    path = tmp_path / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
-    return path
-
 
 def _write_code_lines(tmp_path: Path, count: int, name: str = "module.py") -> Path:
-    return _write_module(tmp_path, _CODE_LINE * count, name)
+    return write_module(tmp_path, CODE_LINE * count, name)
 
 
 def _write_function(tmp_path: Path, code_lines: int, name: str = "module.py") -> Path:
-    return _write_module(tmp_path, "def big():\n" + _INDENTED_CODE_LINE * (code_lines - 1), name)
-
-
-def _oversized_file_and_function(directive: str) -> str:
-    return (
-        directive
-        + "def big():\n"
-        + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION + 1)
-        + "\n"
-        + _CODE_LINE * MAX_LINES_SRC
-    )
+    return write_module(tmp_path, "def big():\n" + INDENTED_CODE_LINE * (code_lines - 1), name)
 
 
 # ---------------------------------------------------------------------------
@@ -107,25 +88,25 @@ def test_main_when_over_limit_does_report_path_count_and_limit(
             id="comments-and-blanks",
         ),
         pytest.param(
-            _CODE_LINE * (MAX_LINES_SRC - 4) + 's = """\na\n\nb\n"""\n',
+            CODE_LINE * (MAX_LINES_SRC - 4) + 's = """\na\n\nb\n"""\n',
             id="blank-in-multiline-string",
         ),
         pytest.param(
-            '"""Module\ndocstring\nhere."""\n' + _CODE_LINE * MAX_LINES_SRC,
+            '"""Module\ndocstring\nhere."""\n' + CODE_LINE * MAX_LINES_SRC,
             id="module-docstring",
         ),
         pytest.param(
-            'class C:\n    """Docstring."""\n' + _INDENTED_CODE_LINE * (MAX_LINES_SRC - 1),
-            id="class-docstring",
+            '"""First.\n\nThird.\n"""\n' + CODE_LINE * MAX_LINES_SRC,
+            id="docstring-with-blank-lines",
         ),
         pytest.param(
-            '"""First.\n\nThird.\n"""\n' + _CODE_LINE * MAX_LINES_SRC,
-            id="docstring-with-blank-lines",
+            'class C:\n    """Docstring."""\n' + INDENTED_CODE_LINE * (MAX_LINES_SRC - 1),
+            id="class-docstring",
         ),
     ],
 )
 def test_main_when_non_code_content_present_does_not_count_it(tmp_path: Path, content: str) -> None:
-    file = _write_module(tmp_path, content)
+    file = write_module(tmp_path, content)
 
     exit_code = main([str(file)])
 
@@ -142,7 +123,7 @@ def test_main_when_non_code_content_present_does_not_count_it(tmp_path: Path, co
 def test_main_when_multiline_string_present_does_count_every_line(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], tail: str
 ) -> None:
-    file = _write_module(tmp_path, _CODE_LINE * (MAX_LINES_SRC - 2) + tail)
+    file = write_module(tmp_path, CODE_LINE * (MAX_LINES_SRC - 2) + tail)
 
     exit_code = main([str(file)])
 
@@ -160,7 +141,7 @@ def _missing_file(tmp_path: Path) -> Path:
 
 
 def _broken_file(tmp_path: Path) -> Path:
-    return _write_module(tmp_path, 'x = "unterminated\n', "broken.py")
+    return write_module(tmp_path, 'x = "unterminated\n', "broken.py")
 
 
 @pytest.mark.parametrize(
@@ -247,16 +228,15 @@ def test_main_when_max_lines_flags_given_does_override_defaults(
 # main — negative line-limit rejection
 # ---------------------------------------------------------------------------
 
+_LIMIT_FLAG_PARAMS = [
+    pytest.param("--max-lines", id="max-lines"),
+    pytest.param("--max-lines-test", id="max-lines-test"),
+    pytest.param("--max-lines-per-function", id="max-lines-per-function"),
+    pytest.param("--max-lines-per-function-test", id="max-lines-per-function-test"),
+]
 
-@pytest.mark.parametrize(
-    "flag",
-    [
-        pytest.param("--max-lines", id="max-lines"),
-        pytest.param("--max-lines-test", id="max-lines-test"),
-        pytest.param("--max-lines-per-function", id="max-lines-per-function"),
-        pytest.param("--max-lines-per-function-test", id="max-lines-per-function-test"),
-    ],
-)
+
+@pytest.mark.parametrize("flag", _LIMIT_FLAG_PARAMS)
 def test_main_when_negative_line_limit_given_does_exit_two(tmp_path: Path, flag: str) -> None:
     file = _write_code_lines(tmp_path, 1)
 
@@ -266,17 +246,9 @@ def test_main_when_negative_line_limit_given_does_exit_two(tmp_path: Path, flag:
     assert exc_info.value.code == 2
 
 
-@pytest.mark.parametrize(
-    "flag",
-    [
-        pytest.param("--max-lines", id="max-lines"),
-        pytest.param("--max-lines-test", id="max-lines-test"),
-        pytest.param("--max-lines-per-function", id="max-lines-per-function"),
-        pytest.param("--max-lines-per-function-test", id="max-lines-per-function-test"),
-    ],
-)
+@pytest.mark.parametrize("flag", _LIMIT_FLAG_PARAMS)
 def test_main_when_zero_line_limit_given_does_accept_it(tmp_path: Path, flag: str) -> None:
-    file = _write_module(tmp_path, "")
+    file = write_module(tmp_path, "")
 
     exit_code = main([flag, "0", str(file)])
 
@@ -307,12 +279,12 @@ def test_main_when_function_exceeds_limit_does_report_name_line_and_count(
     "content",
     [
         pytest.param(
-            "def big():\n    # comment\n\n" + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
+            "def big():\n    # comment\n\n" + INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
             id="comments-and-blanks",
         ),
         pytest.param(
             'def big():\n    """Function\n    docstring\n    here."""\n'
-            + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
+            + INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
             id="function-docstring",
         ),
     ],
@@ -320,7 +292,7 @@ def test_main_when_function_exceeds_limit_does_report_name_line_and_count(
 def test_main_when_function_has_non_code_content_does_not_count_it(
     tmp_path: Path, content: str
 ) -> None:
-    file = _write_module(tmp_path, content)
+    file = write_module(tmp_path, content)
 
     exit_code = main([str(file)])
 
@@ -360,17 +332,17 @@ def test_main_when_function_limit_flags_vary_does_gate_the_check(
     [
         pytest.param(
             "--no-skip-blank-lines",
-            "x = 1\n\n" * 5 + _CODE_LINE * (MAX_LINES_SRC - 5),
+            "x = 1\n\n" * 5 + CODE_LINE * (MAX_LINES_SRC - 5),
             id="blank-lines",
         ),
         pytest.param(
             "--no-skip-comments",
-            "# comment\n" * 5 + _CODE_LINE * MAX_LINES_SRC,
+            "# comment\n" * 5 + CODE_LINE * MAX_LINES_SRC,
             id="comment-lines",
         ),
         pytest.param(
             "--no-skip-docstrings",
-            '"""Module\ndocstring\nhere."""\n' + _CODE_LINE * MAX_LINES_SRC,
+            '"""Module\ndocstring\nhere."""\n' + CODE_LINE * MAX_LINES_SRC,
             id="docstring-lines",
         ),
     ],
@@ -378,7 +350,7 @@ def test_main_when_function_limit_flags_vary_does_gate_the_check(
 def test_main_when_no_skip_flag_given_does_count_non_code_content(
     tmp_path: Path, flag: str, content: str
 ) -> None:
-    file = _write_module(tmp_path, content)
+    file = write_module(tmp_path, content)
 
     exit_code = main([flag, str(file)])
 
@@ -388,8 +360,8 @@ def test_main_when_no_skip_flag_given_does_count_non_code_content(
 def test_main_when_all_no_skip_flags_given_does_count_every_line(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    content = '"""Docstring."""\n# comment\n\n' + _CODE_LINE * MAX_LINES_SRC
-    file = _write_module(tmp_path, content)
+    content = '"""Docstring."""\n# comment\n\n' + CODE_LINE * MAX_LINES_SRC
+    file = write_module(tmp_path, content)
 
     exit_code = main(
         [
@@ -414,18 +386,18 @@ def test_main_when_all_no_skip_flags_given_does_count_every_line(
     [
         pytest.param(
             "--no-skip-blank-lines",
-            "def big():\n\n\n" + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
+            "def big():\n\n\n" + INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
             id="blank-lines",
         ),
         pytest.param(
             "--no-skip-comments",
-            "def big():\n    # a\n    # b\n" + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
+            "def big():\n    # a\n    # b\n" + INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
             id="comment-lines",
         ),
         pytest.param(
             "--no-skip-docstrings",
             'def big():\n    """Function\n    docstring."""\n'
-            + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
+            + INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
             id="docstring-lines",
         ),
     ],
@@ -433,7 +405,7 @@ def test_main_when_all_no_skip_flags_given_does_count_every_line(
 def test_main_when_no_skip_flag_given_does_count_non_code_in_function(
     tmp_path: Path, flag: str, content: str
 ) -> None:
-    file = _write_module(tmp_path, content)
+    file = write_module(tmp_path, content)
 
     exit_code = main([flag, str(file)])
 
@@ -456,6 +428,16 @@ def test_main_when_argv_omitted_does_read_sys_argv(
     assert exit_code == 1
 
 
+def test_main_when_help_flag_does_show_report_unused_disable_directives(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--help"])
+
+    assert exc_info.value.code == 0
+    assert "--report-unused-disable-directives" in capsys.readouterr().out
+
+
 def test_module_entry_when_file_over_limit_does_exit_one(tmp_path: Path) -> None:
     file = _write_code_lines(tmp_path, MAX_LINES_SRC + 1)
 
@@ -468,430 +450,3 @@ def test_module_entry_when_file_over_limit_does_exit_one(tmp_path: Path) -> None
 
     assert result.returncode == 1
     assert f"{file}: {MAX_LINES_SRC + 1} code lines" in result.stdout
-
-
-# ---------------------------------------------------------------------------
-# directives — file-scope disable=max-lines
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "content",
-    [
-        pytest.param(
-            "# pymaxlines: disable=max-lines\n" + _CODE_LINE * (MAX_LINES_SRC + 1),
-            id="before-first-statement",
-        ),
-        pytest.param(
-            '"""Module docstring."""\n# pymaxlines: disable=max-lines\n'
-            + _CODE_LINE * (MAX_LINES_SRC + 1),
-            id="after-docstring",
-        ),
-        pytest.param(
-            '# pymaxlines: disable=max-lines\n"""Module docstring."""\n'
-            + _CODE_LINE * (MAX_LINES_SRC + 1),
-            id="above-docstring",
-        ),
-    ],
-)
-def test_main_when_file_has_disable_max_lines_does_skip_file_check(
-    tmp_path: Path, content: str
-) -> None:
-    file = _write_module(tmp_path, content)
-
-    exit_code = main([str(file)])
-
-    assert exit_code == 0
-
-
-# ---------------------------------------------------------------------------
-# directives — function-scope disable=max-lines-per-function
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "content",
-    [
-        pytest.param(
-            "def big():  # pymaxlines: disable=max-lines-per-function\n"
-            + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION + 1),
-            id="plain-def",
-        ),
-        pytest.param(
-            "def big(\n"
-            "    a,\n"
-            "    b,\n"
-            "):  # pymaxlines: disable=max-lines-per-function\n"
-            + _INDENTED_CODE_LINE
-            * (MAX_LINES_PER_FUNCTION + 1),
-            id="wrapped-signature",
-        ),
-        pytest.param(
-            "class C:\n"
-            "    def big(self):  # pymaxlines: disable=max-lines-per-function\n"
-            + "        x = 1\n"
-            * (MAX_LINES_PER_FUNCTION + 1),
-            id="method",
-        ),
-        pytest.param(
-            "def big():  # pymaxlines: disable\n"
-            + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION + 1),
-            id="bare-disable",
-        ),
-        pytest.param(
-            "def big():  # noqa: C901  # pymaxlines: disable=max-lines-per-function\n"
-            + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION + 1),
-            id="shared-with-noqa",
-        ),
-        pytest.param(
-            "async def big():  # pymaxlines: disable=max-lines-per-function\n"
-            + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION + 1),
-            id="async-def",
-        ),
-    ],
-)
-def test_main_when_def_has_disable_per_function_does_skip_that_function(
-    tmp_path: Path, content: str
-) -> None:
-    file = _write_module(tmp_path, content)
-
-    exit_code = main([str(file)])
-
-    assert exit_code == 0
-
-
-def test_main_when_def_has_disable_but_sibling_does_not_does_still_report_sibling(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    content = (
-        "def exempt():  # pymaxlines: disable=max-lines-per-function\n"
-        + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION + 1)
-        + "\n\ndef big():\n"
-        + _INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION + 1)
-    )
-    file = _write_module(tmp_path, content)
-
-    exit_code = main([str(file)])
-
-    assert exit_code == 1
-    out = capsys.readouterr().out
-    assert "exempt" not in out
-    assert "big" in out
-
-
-# ---------------------------------------------------------------------------
-# directives — method and nested function scope
-# ---------------------------------------------------------------------------
-
-
-def test_main_when_outer_has_disable_but_nested_is_oversized_does_still_report_nested(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    nested_body = "        x = 1\n" * (MAX_LINES_PER_FUNCTION + 1)
-    content = (
-        "def outer():  # pymaxlines: disable=max-lines-per-function\n"
-        "    def nested():\n" + nested_body + "    pass\n"
-    )
-    file = _write_module(tmp_path, content)
-
-    exit_code = main([str(file)])
-
-    assert exit_code == 1
-    out = capsys.readouterr().out
-    assert "function 'nested'" in out
-    assert "function 'outer'" not in out
-
-
-# ---------------------------------------------------------------------------
-# directives — bare disable and comma-separated rules
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "directive",
-    [
-        pytest.param("# pymaxlines: disable\n", id="bare-disable"),
-        pytest.param(
-            "# pymaxlines: disable=max-lines,max-lines-per-function\n",
-            id="comma-separated",
-        ),
-        pytest.param(
-            "#pymaxlines:disable = max-lines , max-lines-per-function\n",
-            id="extra-whitespace",
-        ),
-    ],
-)
-def test_main_when_file_scope_disable_does_suppress_file_and_functions(
-    tmp_path: Path, directive: str
-) -> None:
-    content = _oversized_file_and_function(directive)
-    file = _write_module(tmp_path, content)
-
-    exit_code = main([str(file)])
-
-    assert exit_code == 0
-
-
-# ---------------------------------------------------------------------------
-# directives — partial file-scope disable
-# ---------------------------------------------------------------------------
-
-
-def test_main_when_file_scope_disable_per_function_does_exempt_functions_but_check_file(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    content = _oversized_file_and_function("# pymaxlines: disable=max-lines-per-function\n")
-    file = _write_module(tmp_path, content)
-
-    exit_code = main([str(file)])
-
-    assert exit_code == 1
-    out = capsys.readouterr().out
-    assert "code lines (max" in out
-    assert "function" not in out
-
-
-def test_main_when_file_scope_disable_max_lines_does_still_report_oversized_functions(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    content = _oversized_file_and_function("# pymaxlines: disable=max-lines\n")
-    file = _write_module(tmp_path, content)
-
-    exit_code = main([str(file)])
-
-    assert exit_code == 1
-    out = capsys.readouterr().out
-    assert "function 'big'" in out
-    assert f"{file}: " not in out
-
-
-# ---------------------------------------------------------------------------
-# directives — error: unknown rule
-# ---------------------------------------------------------------------------
-
-
-def test_main_when_directive_has_unknown_rule_does_report_error(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    content = "# pymaxlines: disable=banana\n" + _CODE_LINE * 5
-    file = _write_module(tmp_path, content)
-
-    exit_code = main([str(file)])
-
-    assert exit_code == 1
-    assert f"{file}:1: unknown rule 'banana' in pymaxlines directive" in capsys.readouterr().out
-
-
-# ---------------------------------------------------------------------------
-# directives — error: malformed directive
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "line",
-    [
-        pytest.param("# pymaxlines: enable\n", id="enable-instead-of-disable"),
-        pytest.param("# pymaxlines: disable=\n", id="disable-equals-empty"),
-        pytest.param(
-            "# pymaxlines: disable max-lines\n",
-            id="space-instead-of-equals",
-        ),
-        pytest.param("# pymaxlines:\n", id="bare-pymaxlines-colon"),
-    ],
-)
-def test_main_when_directive_is_malformed_does_report_malformed(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], line: str
-) -> None:
-    content = line + _CODE_LINE * 5
-    file = _write_module(tmp_path, content)
-
-    exit_code = main([str(file)])
-
-    assert exit_code == 1
-    assert (
-        f"{file}:1: malformed pymaxlines directive;"
-        " expected 'disable' or 'disable=<rule>[,<rule>]'" in capsys.readouterr().out
-    )
-
-
-# ---------------------------------------------------------------------------
-# directives — error: misplaced directive
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "content",
-    [
-        pytest.param(
-            "x = 1  # pymaxlines: disable\n" + _CODE_LINE * 5,
-            id="on-assignment",
-        ),
-        pytest.param(
-            "class C:  # pymaxlines: disable\n    pass\n",
-            id="on-class",
-        ),
-        pytest.param(
-            "x = 1\n# pymaxlines: disable=max-lines\n" + _CODE_LINE * 5,
-            id="after-first-statement",
-        ),
-        pytest.param(
-            "def big():\n    # pymaxlines: disable=max-lines-per-function\n"
-            + _INDENTED_CODE_LINE * 2,
-            id="comment-inside-function-body",
-        ),
-    ],
-)
-def test_main_when_directive_is_misplaced_does_report_misplaced(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], content: str
-) -> None:
-    file = _write_module(tmp_path, content)
-
-    exit_code = main([str(file)])
-
-    assert exit_code == 1
-    assert "misplaced pymaxlines directive" in capsys.readouterr().out
-
-
-# ---------------------------------------------------------------------------
-# directives — error: file-only rule on a def line
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "content",
-    [
-        pytest.param(
-            "def big():  # pymaxlines: disable=max-lines\n" + _INDENTED_CODE_LINE * 5,
-            id="multi-line-def",
-        ),
-        pytest.param(
-            "def stub(): ...  # pymaxlines: disable=max-lines\n",
-            id="one-liner-def",
-        ),
-    ],
-)
-def test_main_when_def_has_disable_max_lines_does_report_wrong_scope(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], content: str
-) -> None:
-    file = _write_module(tmp_path, content)
-
-    exit_code = main([str(file)])
-
-    assert exit_code == 1
-    assert (
-        f"{file}:1: rule 'max-lines' does not apply to a function;"
-        " use max-lines-per-function" in capsys.readouterr().out
-    )
-
-
-# ---------------------------------------------------------------------------
-# directives — error priority: syntax before placement
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("directive_line", "expected_fragment"),
-    [
-        pytest.param(
-            "x = 1  # pymaxlines: enable\n",
-            "malformed pymaxlines directive",
-            id="malformed-syntax",
-        ),
-        pytest.param(
-            "x = 1  # pymaxlines: disable=banana\n",
-            "unknown rule 'banana'",
-            id="unknown-rule",
-        ),
-    ],
-)
-def test_main_when_directive_has_validation_error_does_skip_placement_check(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    directive_line: str,
-    expected_fragment: str,
-) -> None:
-    content = directive_line + _CODE_LINE * 5
-    file = _write_module(tmp_path, content)
-
-    exit_code = main([str(file)])
-
-    assert exit_code == 1
-    out = capsys.readouterr().out
-    assert expected_fragment in out
-    assert "misplaced" not in out
-
-
-# ---------------------------------------------------------------------------
-# directives — error does not stop checks
-# ---------------------------------------------------------------------------
-
-
-def test_main_when_directive_has_error_does_still_report_oversized_findings(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    content = "# pymaxlines: disable=banana\n" + _CODE_LINE * (MAX_LINES_SRC + 1)
-    file = _write_module(tmp_path, content)
-
-    exit_code = main([str(file)])
-
-    assert exit_code == 1
-    out = capsys.readouterr().out
-    assert "unknown rule 'banana'" in out
-    assert "code lines (max" in out
-
-
-def test_main_when_file_has_error_and_valid_directive_does_honor_valid_directive(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    content = (
-        "# pymaxlines: disable=max-lines\n"
-        "x = 1  # pymaxlines: disable=banana\n" + _CODE_LINE * (MAX_LINES_SRC + 1)
-    )
-    file = _write_module(tmp_path, content)
-
-    exit_code = main([str(file)])
-
-    assert exit_code == 1
-    out = capsys.readouterr().out
-    assert "unknown rule 'banana'" in out
-    # File check is suppressed by valid directive, so no "code lines" finding
-    assert "code lines (max" not in out
-
-
-# ---------------------------------------------------------------------------
-# directives — interaction with --no-skip-comments
-# ---------------------------------------------------------------------------
-
-
-def test_main_when_directive_present_does_honor_it_regardless_of_skip_comments(
-    tmp_path: Path,
-) -> None:
-    content = "# pymaxlines: disable=max-lines\n" + _CODE_LINE * (MAX_LINES_SRC + 1)
-    file = _write_module(tmp_path, content)
-
-    exit_code = main(["--no-skip-comments", str(file)])
-
-    assert exit_code == 0
-
-
-# ---------------------------------------------------------------------------
-# directives — isolation between files
-# ---------------------------------------------------------------------------
-
-
-def test_main_when_directive_in_one_file_does_not_affect_another(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    exempt = _write_module(
-        tmp_path,
-        "# pymaxlines: disable=max-lines\n" + _CODE_LINE * (MAX_LINES_SRC + 1),
-        "exempt.py",
-    )
-    oversized = _write_code_lines(tmp_path, MAX_LINES_SRC + 1, "oversized.py")
-
-    exit_code = main([str(exempt), str(oversized)])
-
-    assert exit_code == 1
-    out = capsys.readouterr().out
-    assert str(oversized) in out
-    assert str(exempt) not in out
