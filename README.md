@@ -68,9 +68,10 @@ uvx pymaxlines file1.py file2.py
 
 ## Usage
 
-The hook runs on `.py` and `.pyi` files. A file is a **test file** when it sits under a `tests/`
-directory or is named `test_*.py` or `*_test.py`. Everything else is a **source file**. The flag
-table below uses these terms in its "Applies to" column.
+The hook runs on `.py` and `.pyi` files. A file is a **test file** when the path passed on the
+command line contains a `tests/` component, or the filename matches `test_*.py`, `test_*.pyi`, or
+`*_test.py`. Everything else is a **source file**. The flag table below uses these terms in its
+"Applies to" column.
 
 Defaults, all overridable with flags:
 
@@ -98,6 +99,58 @@ Each `--skip-*` flag has a `--no-skip-*` counterpart. To count comment-only and 
   args: [--no-skip-comments, --no-skip-blank-lines]
 ```
 
+### Suppressing a finding
+
+_Added after v0.3.0._
+
+Add a `# pymaxlines: disable` comment to exempt a file or function from the checks instead of
+raising the global limit.
+
+**File-level** — place the directive on a comment-only line before the first statement (after the
+module docstring is fine):
+
+```python
+# pymaxlines: disable=max-lines
+"""This generated module is intentionally large."""
+
+import re
+# ...
+```
+
+**Function-level** — trail the directive on any line of the `def` signature (the `def` line through
+the closing `):`). On a decorated function, place it on the `def` line, not a decorator line:
+
+```python
+def big_handler(
+    request: Request,
+    db: Session,
+):  # pymaxlines: disable=max-lines-per-function
+    ...
+```
+
+**Bare disable** — `# pymaxlines: disable` without `=rule` disables every rule at its scope.
+At file scope it suppresses both the file check and every function check; on a `def` line it exempts
+that function.
+
+Separate several rules with commas: `# pymaxlines: disable=max-lines,max-lines-per-function`.
+
+A directive can share its `#` line with other comments:
+`def big_handler(...):  # noqa: C901  # pymaxlines: disable`.
+
+Each rule is only valid at certain scopes:
+
+| Rule                     | Valid scopes |
+| ------------------------ | ------------ |
+| `max-lines`              | file         |
+| `max-lines-per-function` | file, `def`  |
+
+An unknown rule name, a malformed directive, or a misplaced directive fails the run with a
+diagnostic message, even when the file is within its limits. A directive is misplaced when it
+appears on a comment-only line after the module's first statement, inside a function body, or
+trailing a non-`def` statement. Naming a file-scope-only rule on a `def` line is a separate error —
+`# pymaxlines: disable=max-lines` on a `def` line fails with
+`rule 'max-lines' does not apply to a function; use max-lines-per-function`.
+
 ### What counts as a code line
 
 By default (all `--skip-*` flags on):
@@ -116,8 +169,10 @@ file and function totals.
 
 ## Contributing
 
-Run `task --list` for the development workflow. `task check` runs every hook; `task test:matrix`
-runs the suite on each supported Python version.
+Install [go-task](https://taskfile.dev) and [uv](https://docs.astral.sh/uv/), then run
+`task install` to sync dependencies and install the git hooks. `task --list` shows the full
+development workflow. `task check` runs every hook; `task test:matrix` runs the suite on each
+supported Python version.
 
 ## License
 

@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Inline `# pymaxlines: disable` comments that exempt a file or a function from the checks instead
+  of raising the global limit.
+
 ## [0.3.0] - 2026-09-03
 
 ### Added

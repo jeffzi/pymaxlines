@@ -18,6 +18,7 @@
     "makepyfile",
     "McCabe",
     "modifyitems",
+    "noqa",
     "prek",
     "pydocstyle",
     "pymaxlines",
