@@ -8,8 +8,8 @@ this file. It is gitignored for personal, machine-specific preferences and never
 ## Commands
 
 `Taskfile.yml` wraps the common workflows — run `task --list` to see them. These are the only
-entrypoints; never bypass them by calling scripts, tools, or `python` directly — the task and prek
-layers manage the virtualenv, file selection, and flags.
+entrypoints; never bypass them by calling tools or `python` directly — the task and prek layers
+manage the virtualenv, file selection, and flags.
 
 - `task install` — sync the project and dev dependencies from the lockfile (`uv sync --locked`),
   then install the prek hooks.
@@ -22,9 +22,6 @@ layers manage the virtualenv, file selection, and flags.
 - `task check:fix` — auto-fix everything that supports it: `uv run ruff check --fix`,
   `uv run ruff format`, `dprint fmt`, markdownlint (`uv run prek run -a markdownlint-cli2`).
 - `task clean` — remove build artifacts, caches, and virtualenvs.
-
-`scripts/` holds prek hook implementations — not standalone scripts. Never invoke them directly
-(with `python`, `uv run python`, or any other method); use `uv run prek run <hook-id>` instead.
 
 ## Git hygiene
 
@@ -48,7 +45,7 @@ user and wait for explicit approval; never promote a suppression into config on 
 Treat a cspell failure as a prompt to reword, not to grow the dictionary. Prefer plain words in
 prose and identifiers. A word earns a `cspell.json` entry only when it comes from outside the
 project and cannot be renamed — command names, API identifiers, file formats, proper nouns, domain
-vocabulary (e.g. `taskkill`, `killpg`, `pytestmark`). In tests, never invent gibberish that needs a
+vocabulary (e.g. `addopts`, `conftest`, `pyrefly`). In tests, never invent gibberish that needs a
 suppression — any real word works for an unknown command, a bogus flag, or filler data, so pick one
 (`banana`, not an invented pseudo-word). `# cspell:disable-line` is reserved for fixtures where the
 gibberish
