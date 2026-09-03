@@ -5,13 +5,18 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 from pymaxlines import MAX_LINES_PER_FUNCTION, MAX_LINES_SRC
 
-_HOOK_REPO = str(Path(__file__).resolve().parent.parent)
+_HOOK_REPO = Path(__file__).resolve().parent.parent
 _CODE_LINE = "x = 1\n"
 _INDENTED_CODE_LINE = "    x = 1\n"
 
@@ -26,12 +31,28 @@ def _git(repo: Path, *args: str) -> None:
 
 
 @pytest.fixture
-def git_repo(tmp_path: Path) -> Path:
-    """A disposable git repo with minimal user config."""
-    _git(tmp_path, "init")
-    _git(tmp_path, "config", "user.email", "test@test.com")
-    _git(tmp_path, "config", "user.name", "Test")
-    return tmp_path
+def git_repo(tmp_path: Path) -> Iterator[Path]:
+    """A disposable git repo on the same drive as the hook source.
+
+    ``pre-commit try-repo`` computes a relative path between the test repo and
+    the hook source. On Windows CI the default ``tmp_path`` can land on a
+    different drive (C:) than the checkout (D:), making ``os.path.relpath``
+    impossible and causing exit code 3.
+    """
+    if tmp_path.anchor != _HOOK_REPO.anchor:
+        td = tempfile.TemporaryDirectory(dir=_HOOK_REPO.parent)
+        work = Path(td.name)
+    else:
+        td = None
+        work = tmp_path
+
+    _git(work, "init")
+    _git(work, "config", "user.email", "test@test.com")
+    _git(work, "config", "user.name", "Test")
+    yield work
+
+    if td is not None:
+        td.cleanup()
 
 
 def _stage(repo: Path, name: str, content: str) -> Path:
@@ -52,7 +73,7 @@ def _run_hook(repo: Path) -> subprocess.CompletedProcess[str]:
             "-m",
             "pre_commit",
             "try-repo",
-            _HOOK_REPO,
+            str(_HOOK_REPO),
             "check-max-lines",
             "--all-files",
         ],
