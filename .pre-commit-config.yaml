@@ -43,6 +43,15 @@ repos:
         language: system
         types_or: [python, pyi]
 
+  # Python code-line limits (dogfooding)
+  - repo: local
+    hooks:
+      - id: max-lines
+        name: pymaxlines
+        entry: uv run pymaxlines
+        language: system
+        types: [python]
+
   # Python type checking
   - repo: local
     hooks:
