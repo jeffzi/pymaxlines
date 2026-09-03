@@ -237,6 +237,14 @@ def _parse_args(argv: Sequence[str]) -> _Config:
         help="exclude docstring lines from counts (default: %(default)s)",
     )
     ns = parser.parse_args(argv)
+    for flag in (
+        "max_lines",
+        "max_lines_test",
+        "max_lines_per_function",
+        "max_lines_per_function_test",
+    ):
+        if getattr(ns, flag) < 0:
+            parser.error(f"--{flag.replace('_', '-')} must be a non-negative integer")
     return _Config(**vars(ns))
 
 

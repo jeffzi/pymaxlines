@@ -235,6 +235,47 @@ def test_main_when_max_lines_flags_given_does_override_defaults(
 
 
 # ---------------------------------------------------------------------------
+# main — negative line-limit rejection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [
+        pytest.param("--max-lines", id="max-lines"),
+        pytest.param("--max-lines-test", id="max-lines-test"),
+        pytest.param("--max-lines-per-function", id="max-lines-per-function"),
+        pytest.param("--max-lines-per-function-test", id="max-lines-per-function-test"),
+    ],
+)
+def test_main_when_negative_line_limit_given_does_exit_two(tmp_path: Path, flag: str) -> None:
+    file = _write_code_lines(tmp_path / "module.py", 1)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main([flag, "-1", str(file)])
+
+    assert exc_info.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [
+        pytest.param("--max-lines", id="max-lines"),
+        pytest.param("--max-lines-test", id="max-lines-test"),
+        pytest.param("--max-lines-per-function", id="max-lines-per-function"),
+        pytest.param("--max-lines-per-function-test", id="max-lines-per-function-test"),
+    ],
+)
+def test_main_when_zero_line_limit_given_does_accept_it(tmp_path: Path, flag: str) -> None:
+    file = tmp_path / "module.py"
+    file.write_text("")
+
+    exit_code = main([flag, "0", str(file)])
+
+    assert exit_code == 0
+
+
+# ---------------------------------------------------------------------------
 # main — per-function limits
 # ---------------------------------------------------------------------------
 
