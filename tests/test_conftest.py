@@ -28,7 +28,7 @@ def test_unit_parse():
 @pytest.fixture
 def pytester(pytester: Pytester) -> Pytester:
     """A pytester sandbox preloaded with the real conftest.py plugin and the e2e marker."""
-    pytester.makeini("[pytest]\nmarkers =\n    e2e: end-to-end test\n")
+    pytester.makeini("[pytest]\naddopts = -p no:sugar\nmarkers =\n    e2e: end-to-end test\n")
     pytester.makeconftest(_CONFTEST_SOURCE)
     pytester.makepyfile(_SAMPLE_TESTS)
     return pytester
