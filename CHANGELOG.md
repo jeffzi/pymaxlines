@@ -7,10 +7,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-03
+
 ### Added
 
 - `check-max-lines` pre-commit hook and `pymaxlines` command that fail when a Python file or
   function exceeds a code-line limit, counting only code lines and applying separate limits to test
   files.
 
-[Unreleased]: https://github.com/jeffzi/pymaxlines/commits/main
+[Unreleased]: https://github.com/jeffzi/pymaxlines/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jeffzi/pymaxlines/releases/tag/v0.3.0
