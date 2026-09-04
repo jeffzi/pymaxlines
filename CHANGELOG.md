@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-04
+
 ### Added
 
 - Inline `# pymaxlines: disable` comments that exempt a file or a function from the checks, with
@@ -33,5 +35,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function exceeds a code-line limit, counting only code lines and applying separate limits to test
   files.
 
-[Unreleased]: https://github.com/jeffzi/pymaxlines/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jeffzi/pymaxlines/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jeffzi/pymaxlines/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jeffzi/pymaxlines/releases/tag/v0.3.0
