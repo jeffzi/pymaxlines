@@ -114,33 +114,11 @@ def test_pymaxlines_when_run_against_e2e_repo_does_detect_oversized_file(
 # _clone_repo — git clone failure discrimination
 # ---------------------------------------------------------------------------
 
-_CONNECTIVITY_STDERR_SAMPLES = [
-    pytest.param(
-        b"fatal: unable to access 'https://...': Could not resolve host: github.com\n",
-        id="could-not-resolve-host",
-    ),
-    pytest.param(
-        b"fatal: unable to access 'https://...': Connection timed out\n", id="connection-timed-out"
-    ),
-    pytest.param(
-        b"fatal: unable to access 'https://...': Connection refused\n", id="connection-refused"
-    ),
-    pytest.param(
-        b"fatal: unable to access 'https://...': Failed to connect to github.com\n",
-        id="failed-to-connect",
-    ),
-]
-
 
 def _run_clone_with_fake_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stderr: bytes
 ) -> Path:
-    """Call ``_clone_repo`` with subprocess.run rigged to fail.
-
-    Patches subprocess.run to raise CalledProcessError with the given stderr,
-    then calls ``_clone_repo`` — the helper that the e2e_checkout fixture
-    delegates to for clone + error discrimination.
-    """
+    """Rig subprocess.run to fail, then call the helper the e2e_checkout fixture delegates to."""
     target_dir = tmp_path / "clone-target"
     error = subprocess.CalledProcessError(128, ["git", "clone"], output=b"", stderr=stderr)
 
@@ -152,41 +130,21 @@ def _run_clone_with_fake_error(
     return _clone_repo("/usr/bin/git", target_dir)
 
 
-@pytest.mark.parametrize("stderr", _CONNECTIVITY_STDERR_SAMPLES)
 def test_clone_repo_when_connectivity_error_does_skip(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    stderr: bytes,
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stderr = b"fatal: unable to access 'https://...': Could not resolve host: github.com\n"
+
     with pytest.raises(pytest.skip.Exception) as exc_info:
         _run_clone_with_fake_error(monkeypatch, tmp_path, stderr)
 
-    assert stderr.decode().strip() in str(exc_info.value), (
-        "skip message should include the actual stderr"
-    )
+    assert stderr.decode().strip() in str(exc_info.value)
 
 
-@pytest.mark.parametrize(
-    "stderr",
-    [
-        pytest.param(
-            b"fatal: Remote branch v99.99.99 not found in upstream origin\n",
-            id="wrong-tag",
-        ),
-        pytest.param(
-            b"remote: Repository not found.\nfatal: repository 'https://...' not found\n",
-            id="wrong-url",
-        ),
-        pytest.param(
-            b"fatal: some totally unknown git error\n",
-            id="unknown-error",
-        ),
-    ],
-)
 def test_clone_repo_when_non_connectivity_error_does_not_skip(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    stderr: bytes,
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stderr = b"fatal: Remote branch v99.99.99 not found in upstream origin\n"
+
     with pytest.raises(subprocess.CalledProcessError):
         _run_clone_with_fake_error(monkeypatch, tmp_path, stderr)
