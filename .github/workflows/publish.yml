@@ -7,7 +7,14 @@ on:
 permissions: {}
 
 jobs:
+  lint:
+    uses: ./.github/workflows/prek.yml # zizmor: ignore[self-repository] — actionlint rejects $/
+
+  test:
+    uses: ./.github/workflows/pytest.yml # zizmor: ignore[self-repository] — actionlint rejects $/
+
   build:
+    needs: [lint, test]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
