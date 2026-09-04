@@ -15,9 +15,15 @@ import pytest
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-from conftest import CODE_LINE, INDENTED_CODE_LINE, REPO_ROOT
+from conftest import (
+    CODE_LINE,
+    REPO_ROOT,
+    file_diagnostic,
+    function_diagnostic,
+    make_oversized_function,
+)
 
-from pymaxlines import MAX_LINES_PER_FUNCTION, MAX_LINES_SRC
+from pymaxlines import MAX_LINES_SRC
 
 _HOOK_REPO = REPO_ROOT
 
@@ -100,15 +106,11 @@ def test_hook_when_file_or_function_exceeds_limit_does_fail_with_diagnostics(
     git_repo: Path,
 ) -> None:
     _stage(git_repo, "oversized.py", CODE_LINE * (MAX_LINES_SRC + 1))
-    _stage(
-        git_repo, "big_function.py", "def big():\n" + INDENTED_CODE_LINE * MAX_LINES_PER_FUNCTION
-    )
+    func_source, func_count = make_oversized_function()
+    _stage(git_repo, "big_function.py", func_source)
 
     result = _run_hook(git_repo)
 
     assert result.returncode == 1
-    assert f"oversized.py: {MAX_LINES_SRC + 1} code lines (max {MAX_LINES_SRC})" in result.stdout
-    assert (
-        f"big_function.py:1: function 'big' has {MAX_LINES_PER_FUNCTION + 1} code lines"
-        in result.stdout
-    )
+    assert file_diagnostic(MAX_LINES_SRC + 1, path="oversized.py") in result.stdout
+    assert function_diagnostic(1, "big", func_count, path="big_function.py") in result.stdout

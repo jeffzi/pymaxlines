@@ -6,10 +6,11 @@ import ast
 import io
 import tokenize
 from dataclasses import dataclass
+from operator import attrgetter
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Iterator
+    from collections.abc import Collection
 
 NON_CODE_TOKENS = frozenset(
     {
@@ -22,18 +23,16 @@ NON_CODE_TOKENS = frozenset(
     }
 )
 
+# Tokens that do not make a line "code-bearing" for docstring-skip purposes.
+# A docstring line is only skippable when every token on that line falls in
+# this set — i.e. the line carries no keyword, name, operator, or number.
+_DOCSTRING_SKIP_IGNORED_TOKENS = NON_CODE_TOKENS | frozenset({tokenize.STRING, tokenize.ENCODING})
+
 OPEN_BRACKETS = frozenset({"(", "[", "{"})
 CLOSE_BRACKETS = frozenset({")", "]", "}"})
 
 FUNCTION_DEF_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef)
 DOCSTRING_CONTAINERS = (ast.Module, ast.ClassDef, *FUNCTION_DEF_TYPES)
-
-
-def iter_functions(tree: ast.Module) -> Iterator[ast.FunctionDef | ast.AsyncFunctionDef]:
-    """Yield every function and async-function definition in *tree*, at any nesting depth."""
-    for node in ast.walk(tree):
-        if isinstance(node, FUNCTION_DEF_TYPES):
-            yield node
 
 
 def is_docstring_stmt(stmt: ast.stmt) -> bool:
@@ -119,12 +118,19 @@ def code_line_numbers(
     source: str,
     tree: ast.Module,
     *,
-    skip_blank_lines: bool = True,
-    skip_comment_lines: Collection[int] = frozenset(),
-    skip_docstrings: bool = True,
+    skip_blank_lines: bool,
+    skip_comment_lines: Collection[int],
+    skip_docstrings: bool,
 ) -> set[int]:
+    """Return the set of 1-indexed line numbers counted as code.
+
+    Blank lines, comment-only lines, and docstring lines are optionally
+    excluded.  A docstring line is only skipped when it carries no other
+    code token on the same line (e.g. a closing delimiter followed by an
+    assignment is kept).
+    """
     lines = source.split("\n")
-    if lines and lines[-1] == "":
+    if lines[-1] == "":
         lines.pop()
     all_line_numbers = set(range(1, len(lines) + 1))
 
@@ -133,7 +139,12 @@ def code_line_numbers(
         skip.update(i for i, line in enumerate(lines, 1) if not line.strip())
     skip.update(skip_comment_lines)
     if skip_docstrings:
-        skip.update(docstring_lines(tree))
+        ds_lines = docstring_lines(tree)
+        code_token_lines: set[int] = set()
+        for token in tokenize.generate_tokens(io.StringIO(source).readline):
+            if token.type not in _DOCSTRING_SKIP_IGNORED_TOKENS:
+                code_token_lines.update(range(token.start[0], token.end[0] + 1))
+        skip.update(ds_lines - code_token_lines)
 
     return all_line_numbers - skip
 
@@ -153,11 +164,14 @@ def oversized_functions(
     exempt_lines: frozenset[int] = frozenset(),
 ) -> list[OversizedFunction]:
     oversized: list[OversizedFunction] = []
-    for node in iter_functions(tree):
+    for node in ast.walk(tree):
+        if not isinstance(node, FUNCTION_DEF_TYPES):
+            continue
         if node.lineno in exempt_lines:
             continue
         end = node.end_lineno or node.lineno
         count = sum(1 for number in code_lines if node.lineno <= number <= end)
         if count > limit:
             oversized.append(OversizedFunction(node.name, node.lineno, count))
+    oversized.sort(key=attrgetter("lineno"))
     return oversized

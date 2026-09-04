@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+import os
+import stat
 import sys
 import tokenize
 from dataclasses import dataclass
@@ -11,8 +13,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pymaxlines._directives import (
-    MAX_LINES_PER_FUNCTION_RULE,
-    MAX_LINES_RULE,
+    RULES_DISABLING_FILE,
+    RULES_DISABLING_FUNCTIONS,
     UNUSED_MSG,
     DirectiveResult,
     ValidDirective,
@@ -67,23 +69,24 @@ def report(message: str) -> int:
     return 1
 
 
-def would_exceed_defs(tree: ast.Module, code_lines: set[int], function_limit: int) -> set[int]:
-    if function_limit > 0:
-        return {f.lineno for f in oversized_functions(tree, code_lines, function_limit)}
-    return set()
-
-
 def directive_is_unused(
     directive: ValidDirective,
     *,
     file_exceeds: bool,
     would_oversized: set[int],
-    function_limit: int,
 ) -> bool:
+    """Decide whether *directive* suppressed nothing and should be reported.
+
+    A def-scope directive (one attached to a specific function) is unused when
+    its ``def_line`` does not appear in *would_oversized*.  A broader-scope
+    directive (file or all-functions) is unused when none of the rule classes it
+    disables (file-check, per-function-check) correspond to a triggered
+    violation in *file_exceeds* / *would_oversized*.
+    """
     if directive.def_line is not None:
-        return function_limit == 0 or directive.def_line not in would_oversized
-    suppressed = (MAX_LINES_RULE in directive.rules and file_exceeds) or (
-        MAX_LINES_PER_FUNCTION_RULE in directive.rules and bool(would_oversized)
+        return directive.def_line not in would_oversized
+    suppressed = (bool(directive.rules & RULES_DISABLING_FILE) and file_exceeds) or (
+        bool(directive.rules & RULES_DISABLING_FUNCTIONS) and bool(would_oversized)
     )
     return not suppressed
 
@@ -93,7 +96,6 @@ def report_unused(
     *,
     file_exceeds: bool,
     would_oversized: set[int],
-    function_limit: int,
     path: Path,
 ) -> int:
     exit_code = 0
@@ -102,7 +104,6 @@ def report_unused(
             directive,
             file_exceeds=file_exceeds,
             would_oversized=would_oversized,
-            function_limit=function_limit,
         ):
             exit_code |= report(diagnostic(path, directive.lineno, UNUSED_MSG))
     return exit_code
@@ -168,6 +169,12 @@ def analyze_file(path: Path, config: Config) -> FileAnalysis | str:
 
 
 def check_file(path: Path, config: Config) -> int:
+    """Run every configured check on *path* and return a non-zero exit code on violation.
+
+    Unused-directive detection re-runs ``oversized_functions`` *without*
+    ``exempt_lines`` so it can compare what would have been oversized against
+    what the directives actually suppressed.
+    """
     analysis = analyze_file(path, config)
     if isinstance(analysis, str):
         return report(analysis)
@@ -190,13 +197,20 @@ def check_file(path: Path, config: Config) -> int:
             )
         )
     if config.report_unused_disable_directives and analysis.directives.valid_directives:
+        would_oversized = (
+            {
+                f.lineno
+                for f in oversized_functions(
+                    analysis.tree, analysis.code_lines, analysis.function_limit
+                )
+            }
+            if analysis.function_limit > 0
+            else set()
+        )
         exit_code |= report_unused(
             analysis.directives,
             file_exceeds=file_exceeds,
-            would_oversized=would_exceed_defs(
-                analysis.tree, analysis.code_lines, analysis.function_limit
-            ),
-            function_limit=analysis.function_limit,
+            would_oversized=would_oversized,
             path=path,
         )
     return exit_code
@@ -268,6 +282,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     config = parse_args(sys.argv[1:] if argv is None else argv)
     exit_code = 0
-    for path in config.files:
-        exit_code |= check_file(path, config)
+    try:
+        for path in config.files:
+            exit_code |= check_file(path, config)
+    except BrokenPipeError:
+        # Redirect the stdout fd to devnull so the interpreter shutdown flush
+        # cannot re-raise BrokenPipeError and print "Exception ignored".
+        # Only redirect when stdout is actually a pipe (FIFO); when the error
+        # originates from a higher-level wrapper the fd itself is fine.
+        try:
+            stdout_fd = sys.stdout.fileno()
+            if stat.S_ISFIFO(os.fstat(stdout_fd).st_mode):
+                devnull = os.open(os.devnull, os.O_WRONLY)
+                os.dup2(devnull, stdout_fd)
+                os.close(devnull)
+        except (OSError, ValueError):
+            pass
+        return 1
     return exit_code

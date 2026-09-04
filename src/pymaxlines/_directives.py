@@ -12,14 +12,34 @@ if TYPE_CHECKING:
     import ast
     from pathlib import Path
 
-MAX_LINES_RULE = "max-lines"
-MAX_LINES_PER_FUNCTION_RULE = "max-lines-per-function"
 
-KNOWN_RULES = frozenset({MAX_LINES_RULE, MAX_LINES_PER_FUNCTION_RULE})
-FUNCTION_APPLICABLE_RULES = frozenset({MAX_LINES_PER_FUNCTION_RULE})
+@dataclass(frozen=True, slots=True)
+class RuleEffect:
+    disables_file_check: bool
+    disables_function_check: bool
+    applies_at_def_scope: bool
+
+
+RULE_REGISTRY: dict[str, RuleEffect] = {
+    "max-lines": RuleEffect(
+        disables_file_check=True, disables_function_check=False, applies_at_def_scope=False
+    ),
+    "max-lines-per-function": RuleEffect(
+        disables_file_check=False, disables_function_check=True, applies_at_def_scope=True
+    ),
+}
+
+KNOWN_RULES = frozenset(RULE_REGISTRY)
+RULES_DISABLING_FILE = frozenset(r for r, e in RULE_REGISTRY.items() if e.disables_file_check)
+RULES_DISABLING_FUNCTIONS = frozenset(
+    r for r, e in RULE_REGISTRY.items() if e.disables_function_check
+)
+_FUNCTION_APPLICABLE_RULES = frozenset(
+    r for r, e in RULE_REGISTRY.items() if e.applies_at_def_scope
+)
 
 PYMAXLINES_RE = re.compile(r"pymaxlines\s*:\s*(.*)")
-PYMAXLINES_ATTEMPT_RE = re.compile(r"pymaxlines(?=\s|:|$)", re.IGNORECASE)
+PYMAXLINES_ATTEMPT_RE = re.compile(r"pymaxlines(?!\w)", re.IGNORECASE)
 DISABLE_RE = re.compile(r"disable\s*(?:=\s*(.+))?$")
 
 MALFORMED_MSG = (
@@ -74,6 +94,9 @@ def first_statement_line(tree: ast.Module) -> int | None:
     for i, stmt in enumerate(tree.body):
         if i == 0 and is_docstring_stmt(stmt):
             continue
+        decorators: list[ast.expr] = getattr(stmt, "decorator_list", [])
+        if decorators:
+            return min(stmt.lineno, decorators[0].lineno)
         return stmt.lineno
     return None
 
@@ -104,17 +127,20 @@ def validate_directive(directive_text: str, path: Path, lineno: int) -> list[str
     return rules
 
 
-def function_scope_error(rules: list[str] | None, path: Path, lineno: int) -> str | None:
+def function_scope_error(rules: list[str] | None, path: Path, lineno: int) -> None:
+    """Raise ``DirectiveError`` if any rule does not apply at def scope."""
     if rules is None:
-        return None
-    invalid_rules = [r for r in rules if r not in FUNCTION_APPLICABLE_RULES]
+        return
+    invalid_rules = [r for r in rules if r not in _FUNCTION_APPLICABLE_RULES]
     if not invalid_rules:
-        return None
-    return diagnostic(
-        path,
-        lineno,
-        f"rule '{invalid_rules[0]}' does not apply to a function;"
-        f" use {MAX_LINES_PER_FUNCTION_RULE}",
+        return
+    applicable = ", ".join(sorted(_FUNCTION_APPLICABLE_RULES))
+    raise DirectiveError(
+        diagnostic(
+            path,
+            lineno,
+            f"rule '{invalid_rules[0]}' does not apply to a function; use {applicable}",
+        )
     )
 
 
@@ -125,6 +151,14 @@ def parse_directives(
     header_ranges: dict[int, int],
     path: Path,
 ) -> DirectiveResult:
+    """Classify each comment as a def-scope, file-scope, or misplaced directive.
+
+    Def-scope directives sit on a function-header line and exempt that function.
+    File-scope directives appear on a comment-only line before the first
+    statement and suppress file-level or all-function checks.  Everything else
+    is misplaced.  Malformed or unknown-rule directives are collected as error
+    strings rather than raising, so a single pass reports every problem.
+    """
     first_stmt = first_statement_line(tree)
 
     skip_file = False
@@ -139,38 +173,37 @@ def parse_directives(
             if directive_text is None:
                 continue
             rules = validate_directive(directive_text, path, lineno)
+
+            effective = frozenset(rules) if rules is not None else KNOWN_RULES
+
+            def_line = header_ranges.get(lineno)
+            if def_line is not None and lineno not in comment_only:
+                function_scope_error(rules, path, lineno)
+                exempt.add(def_line)
+                valid.append(ValidDirective(lineno=lineno, rules=effective, def_line=def_line))
+                continue
+
+            is_file_scope = lineno in comment_only and (first_stmt is None or lineno < first_stmt)
+            if is_file_scope:
+                skip_file = skip_file or bool(effective & RULES_DISABLING_FILE)
+                skip_all_functions = skip_all_functions or bool(
+                    effective & RULES_DISABLING_FUNCTIONS
+                )
+                valid.append(ValidDirective(lineno=lineno, rules=effective, def_line=None))
+                continue
+
+            errors.append(
+                diagnostic(
+                    path,
+                    lineno,
+                    "misplaced pymaxlines directive;"
+                    " put it on a comment-only line before the first statement"
+                    " or on a def header line",
+                )
+            )
         except DirectiveError as exc:
             errors.append(str(exc))
             continue
-
-        effective = frozenset(rules) if rules is not None else KNOWN_RULES
-
-        def_line = header_ranges.get(lineno)
-        if def_line is not None and lineno not in comment_only:
-            scope_error = function_scope_error(rules, path, lineno)
-            if scope_error:
-                errors.append(scope_error)
-            else:
-                exempt.add(def_line)
-                valid.append(ValidDirective(lineno=lineno, rules=effective, def_line=def_line))
-            continue
-
-        is_file_scope = lineno in comment_only and (first_stmt is None or lineno < first_stmt)
-        if is_file_scope:
-            skip_file = skip_file or MAX_LINES_RULE in effective
-            skip_all_functions = skip_all_functions or MAX_LINES_PER_FUNCTION_RULE in effective
-            valid.append(ValidDirective(lineno=lineno, rules=effective, def_line=None))
-            continue
-
-        errors.append(
-            diagnostic(
-                path,
-                lineno,
-                "misplaced pymaxlines directive;"
-                " put it on a comment-only line before the first statement"
-                " or on a def header line",
-            )
-        )
 
     return DirectiveResult(
         skip_file_check=skip_file,

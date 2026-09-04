@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from typing import TYPE_CHECKING
 
 import pytest
-from conftest import CODE_LINE, INDENTED_CODE_LINE, write_module
+from conftest import (
+    CODE_LINE,
+    INDENTED_CODE_LINE,
+    capture_main,
+    file_diagnostic,
+    function_diagnostic,
+    make_oversized_function,
+    run_check,
+    write_module,
+)
 
 from pymaxlines import MAX_LINES_PER_FUNCTION, MAX_LINES_SRC, MAX_LINES_TEST, main
 
@@ -16,10 +26,6 @@ if TYPE_CHECKING:
 
 def _write_code_lines(tmp_path: Path, count: int, name: str = "module.py") -> Path:
     return write_module(tmp_path, CODE_LINE * count, name)
-
-
-def _write_function(tmp_path: Path, code_lines: int, name: str = "module.py") -> Path:
-    return write_module(tmp_path, "def big():\n" + INDENTED_CODE_LINE * (code_lines - 1), name)
 
 
 # ---------------------------------------------------------------------------
@@ -62,17 +68,13 @@ def test_main_when_path_marks_a_test_file_does_apply_the_test_limit(
     assert exit_code == 0
 
 
-def test_main_when_over_limit_does_report_path_count_and_limit(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_main_when_over_limit_does_report_path_count_and_limit(tmp_path: Path) -> None:
     file = _write_code_lines(tmp_path, MAX_LINES_SRC + 1)
 
-    exit_code = main([str(file)])
+    exit_code, lines = run_check(file)
 
     assert exit_code == 1
-    assert (
-        capsys.readouterr().out == f"{file}: {MAX_LINES_SRC + 1} code lines (max {MAX_LINES_SRC})\n"
-    )
+    assert lines == [file_diagnostic(MAX_LINES_SRC + 1)]
 
 
 # ---------------------------------------------------------------------------
@@ -121,14 +123,32 @@ def test_main_when_non_code_content_present_does_not_count_it(tmp_path: Path, co
     ],
 )
 def test_main_when_multiline_string_present_does_count_every_line(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], tail: str
+    tmp_path: Path, tail: str
 ) -> None:
     file = write_module(tmp_path, CODE_LINE * (MAX_LINES_SRC - 2) + tail)
 
-    exit_code = main([str(file)])
+    exit_code, lines = run_check(file)
 
     assert exit_code == 1
-    assert f"{MAX_LINES_SRC + 2} code lines (max {MAX_LINES_SRC})" in capsys.readouterr().out
+    assert lines == [file_diagnostic(MAX_LINES_SRC + 2)]
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        pytest.param('def f(): "doc"\n', id="def-inline-docstring"),
+        pytest.param('class C: "doc"\n', id="class-inline-docstring"),
+    ],
+)
+def test_main_when_inline_docstring_on_header_does_count_header_as_code(
+    tmp_path: Path, header: str
+) -> None:
+    file = write_module(tmp_path, CODE_LINE * MAX_LINES_SRC + header)
+
+    exit_code, lines = run_check(file)
+
+    assert exit_code == 1
+    assert lines == [file_diagnostic(MAX_LINES_SRC + 1)]
 
 
 # ---------------------------------------------------------------------------
@@ -152,44 +172,32 @@ def _broken_file(tmp_path: Path) -> Path:
     ],
 )
 def test_main_when_file_cannot_be_read_does_report_error_and_return_one(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], make_file: Callable[[Path], Path]
+    tmp_path: Path, make_file: Callable[[Path], Path]
 ) -> None:
     file = make_file(tmp_path)
 
-    exit_code = main([str(file)])
+    exit_code, output = capture_main([str(file)])
 
     assert exit_code == 1
-    out = capsys.readouterr().out
-    assert out.startswith(f"{file}: could not read (")
-    assert out.endswith(")\n")
+    assert output.startswith(f"{file}: could not read (")
+    assert output.rstrip().endswith(")")
 
 
-def test_main_when_a_file_cannot_be_read_does_still_check_later_files(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_main_when_mix_of_unreadable_clean_and_oversized_does_report_only_offenders(
+    tmp_path: Path,
 ) -> None:
     missing = _missing_file(tmp_path)
-    big = _write_code_lines(tmp_path, MAX_LINES_SRC + 1, "big.py")
+    clean = _write_code_lines(tmp_path, 10, "small.py")
+    oversized = _write_code_lines(tmp_path, MAX_LINES_SRC + 1, "big.py")
 
-    exit_code = main([str(missing), str(big)])
-
-    assert exit_code == 1
-    out = capsys.readouterr().out
-    assert f"{missing}: could not read (" in out
-    assert f"{big}: {MAX_LINES_SRC + 1} code lines (max {MAX_LINES_SRC})\n" in out
-
-
-def test_main_when_multiple_files_does_report_only_offenders(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    good = _write_code_lines(tmp_path, 10, "small.py")
-    bad = _write_code_lines(tmp_path, MAX_LINES_SRC + 1, "big.py")
-
-    exit_code = main([str(good), str(bad)])
+    exit_code, output = capture_main([str(missing), str(clean), str(oversized)])
 
     assert exit_code == 1
-    out = capsys.readouterr().out
-    assert str(bad) in out
-    assert str(good) not in out
+    output_lines = output.splitlines()
+    assert len(output_lines) == 2
+    assert output_lines[0].startswith(f"{missing}: could not read (")
+    assert output_lines[1] == file_diagnostic(MAX_LINES_SRC + 1, path=str(oversized))
+    assert str(clean) not in output
 
 
 # ---------------------------------------------------------------------------
@@ -261,18 +269,49 @@ def test_main_when_zero_line_limit_given_does_accept_it(tmp_path: Path, flag: st
 
 
 def test_main_when_function_exceeds_limit_does_report_name_line_and_count(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
 ) -> None:
-    file = _write_function(tmp_path, MAX_LINES_PER_FUNCTION + 1)
+    source, count = make_oversized_function()
+    file = write_module(tmp_path, source)
 
-    exit_code = main([str(file)])
+    exit_code, lines = run_check(file)
 
     assert exit_code == 1
-    out = capsys.readouterr().out
-    assert out == (
-        f"{file}:1: function 'big' has {MAX_LINES_PER_FUNCTION + 1} code lines"
-        f" (max {MAX_LINES_PER_FUNCTION})\n"
+    assert lines == [function_diagnostic(1, "big", count)]
+
+
+def test_main_when_nested_and_later_functions_oversized_does_report_in_line_order(
+    tmp_path: Path,
+) -> None:
+    body = MAX_LINES_PER_FUNCTION + 1
+    doubly_indented = "        x = 1\n"
+    source = (
+        "def outer():\n"  # line 1
+        "    def inner():\n"  # line 2
+        + doubly_indented * body  # lines 3..63
+        + INDENTED_CODE_LINE  # line 64
+        + "def later():\n"  # line 65
+        + INDENTED_CODE_LINE * body  # lines 66..126
     )
+    file = write_module(tmp_path, source)
+    inner_start = 2
+    outer_code_lines = 2 + body + 1  # def outer + def inner + inner body + trailing line
+    inner_code_lines = body + 1  # def inner + body
+    later_start = outer_code_lines + 1
+    later_code_lines = body + 1  # def later + body
+
+    exit_code, lines = run_check(file)
+
+    assert exit_code == 1
+    reported_linenos = [int(line.split(":")[1]) for line in lines]
+    assert reported_linenos == sorted(reported_linenos), (
+        f"Diagnostics not in line order: {reported_linenos}"
+    )
+    assert lines == [
+        function_diagnostic(1, "outer", outer_code_lines),
+        function_diagnostic(inner_start, "inner", inner_code_lines),
+        function_diagnostic(later_start, "later", later_code_lines),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -299,6 +338,18 @@ def test_main_when_function_has_non_code_content_does_not_count_it(
     assert exit_code == 0
 
 
+def test_main_when_multiline_def_has_docstring_on_closing_paren_does_count_that_line(
+    tmp_path: Path,
+) -> None:
+    content = 'def f(\n    x,\n): "doc"\n'
+    file = write_module(tmp_path, content)
+
+    exit_code, lines = run_check(file, "--max-lines-per-function", "2")
+
+    assert exit_code == 1
+    assert lines == [function_diagnostic(1, "f", 3, limit=2)]
+
+
 @pytest.mark.parametrize(
     ("relative_path", "argv_prefix", "expected_exit"),
     [
@@ -315,7 +366,8 @@ def test_main_when_function_has_non_code_content_does_not_count_it(
 def test_main_when_function_limit_flags_vary_does_gate_the_check(
     tmp_path: Path, relative_path: str, argv_prefix: list[str], expected_exit: int
 ) -> None:
-    file = _write_function(tmp_path, MAX_LINES_PER_FUNCTION + 1, relative_path)
+    source, _ = make_oversized_function()
+    file = write_module(tmp_path, source, relative_path)
 
     exit_code = main([*argv_prefix, str(file)])
 
@@ -357,23 +409,19 @@ def test_main_when_no_skip_flag_given_does_count_non_code_content(
     assert exit_code == 1
 
 
-def test_main_when_all_no_skip_flags_given_does_count_every_line(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_main_when_all_no_skip_flags_given_does_count_every_line(tmp_path: Path) -> None:
     content = '"""Docstring."""\n# comment\n\n' + CODE_LINE * MAX_LINES_SRC
     file = write_module(tmp_path, content)
 
-    exit_code = main(
-        [
-            "--no-skip-blank-lines",
-            "--no-skip-comments",
-            "--no-skip-docstrings",
-            str(file),
-        ]
+    exit_code, lines = run_check(
+        file,
+        "--no-skip-blank-lines",
+        "--no-skip-comments",
+        "--no-skip-docstrings",
     )
 
     assert exit_code == 1
-    assert f"{MAX_LINES_SRC + 3} code lines (max {MAX_LINES_SRC})" in capsys.readouterr().out
+    assert lines == [file_diagnostic(MAX_LINES_SRC + 3)]
 
 
 # ---------------------------------------------------------------------------
@@ -428,16 +476,6 @@ def test_main_when_argv_omitted_does_read_sys_argv(
     assert exit_code == 1
 
 
-def test_main_when_help_flag_does_show_report_unused_disable_directives(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        main(["--help"])
-
-    assert exc_info.value.code == 0
-    assert "--report-unused-disable-directives" in capsys.readouterr().out
-
-
 def test_module_entry_when_file_over_limit_does_exit_one(tmp_path: Path) -> None:
     file = _write_code_lines(tmp_path, MAX_LINES_SRC + 1)
 
@@ -449,4 +487,60 @@ def test_module_entry_when_file_over_limit_does_exit_one(tmp_path: Path) -> None
     )
 
     assert result.returncode == 1
-    assert f"{file}: {MAX_LINES_SRC + 1} code lines" in result.stdout
+    assert result.stdout.rstrip() == file_diagnostic(MAX_LINES_SRC + 1, path=str(file))
+
+
+# ---------------------------------------------------------------------------
+# main — broken pipe handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "cmd_prefix",
+    [
+        pytest.param(["pymaxlines"], id="console-script"),
+        pytest.param([sys.executable, "-m", "pymaxlines"], id="python-m"),
+    ],
+)
+def test_main_when_stdout_closed_mid_run_does_exit_one_without_traceback(
+    tmp_path: Path, cmd_prefix: list[str]
+) -> None:
+    file_a = _write_code_lines(tmp_path, MAX_LINES_SRC + 1, "a.py")
+    file_b = _write_code_lines(tmp_path, MAX_LINES_SRC + 1, "b.py")
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+
+    proc = subprocess.Popen(  # noqa: S603 — fixed commands, no shell
+        [*cmd_prefix, str(file_a), str(file_b)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    assert proc.stdout is not None
+    proc.stdout.readline()
+    proc.stdout.close()
+    proc.wait(timeout=10)
+    stderr = proc.stderr.read() if proc.stderr else ""
+    if proc.stderr:
+        proc.stderr.close()
+
+    assert proc.returncode == 1
+    assert "Traceback" not in stderr
+    assert "Exception ignored" not in stderr
+    assert "BrokenPipeError" not in stderr
+
+
+def test_main_when_stdout_write_raises_broken_pipe_does_return_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    file = _write_code_lines(tmp_path, MAX_LINES_SRC + 1)
+
+    def _broken_write(_text: str) -> int:
+        msg = "Broken pipe"
+        raise BrokenPipeError(msg)
+
+    monkeypatch.setattr(sys.stdout, "write", _broken_write)
+
+    exit_code = main([str(file)])
+
+    assert exit_code == 1

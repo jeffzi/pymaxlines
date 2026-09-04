@@ -1,5 +1,7 @@
 # pymaxlines
 
+[![PyPI](https://img.shields.io/pypi/v/pymaxlines)](https://pypi.org/project/pymaxlines/)
+[![Python: 3.12 | 3.13 | 3.14](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue.svg)](https://github.com/jeffzi/pymaxlines)
 [![CI](https://github.com/jeffzi/pymaxlines/actions/workflows/pytest.yml/badge.svg)](https://github.com/jeffzi/pymaxlines/actions/workflows/pytest.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jeffzi/pymaxlines/blob/main/LICENSE)
 
@@ -11,6 +13,8 @@ Requires Python 3.12+.
 - [Quick example](#quick-example)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Suppressing a finding](#suppressing-a-finding)
+- [What counts as a code line](#what-counts-as-a-code-line)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -35,7 +39,7 @@ applies one limit per file and one per function, with separate thresholds for te
 
 ## Quick example
 
-A failing run prints one line per offender and exits 1:
+A failing run prints one line per finding and exits 1:
 
 ```console
 $ pymaxlines src/app/service.py
@@ -78,16 +82,19 @@ command line contains a `tests/` component, or the filename matches `test_*.py`,
 
 Defaults, all overridable with flags:
 
-| Flag                                 | Applies to | Default | Meaning                                 |
-| ------------------------------------ | ---------- | ------- | --------------------------------------- |
-| `--max-lines`                        | source     | 400     | code lines per file                     |
-| `--max-lines-test`                   | test       | 800     | code lines per file                     |
-| `--max-lines-per-function`           | source     | 60      | code lines per function, `0` disables   |
-| `--max-lines-per-function-test`      | test       | 0       | code lines per function, `0` disables   |
-| `--skip-blank-lines`                 | all        | True    | exclude blank lines from counts         |
-| `--skip-comments`                    | all        | True    | exclude comment-only lines              |
-| `--skip-docstrings`                  | all        | True    | exclude standalone docstrings           |
-| `--report-unused-disable-directives` | all        | off     | report directives that suppress nothing |
+| Flag                                 | Applies to | Default | Meaning                                                                      |
+| ------------------------------------ | ---------- | ------- | ---------------------------------------------------------------------------- |
+| `--max-lines`                        | source     | 400     | code lines per file                                                          |
+| `--max-lines-test`                   | test       | 800     | code lines per file                                                          |
+| `--max-lines-per-function`           | source     | 60      | code lines per function, `0` disables                                        |
+| `--max-lines-per-function-test`      | test       | 0       | code lines per function, `0` disables                                        |
+| `--skip-blank-lines`                 | all        | True    | exclude blank lines from counts                                              |
+| `--skip-comments`                    | all        | True    | exclude comment-only lines                                                   |
+| `--skip-docstrings`                  | all        | True    | exclude standalone docstrings                                                |
+| `--report-unused-disable-directives` | all        | False   | fail on directives that suppress nothing _(unreleased — ships after v0.3.0)_ |
+
+`--max-lines` and `--max-lines-test` have no disable value — `0` fails any file containing code.
+All four limit flags reject negative values.
 
 Pass flags through the hook's `args`:
 
@@ -105,8 +112,6 @@ Each `--skip-*` flag has a `--no-skip-*` counterpart. To count comment-only and 
 
 ### Suppressing a finding
 
-_Added after v0.3.0._
-
 Add a `# pymaxlines: disable` comment to exempt a file or function from the checks instead of
 raising the global limit.
 
@@ -114,8 +119,8 @@ raising the global limit.
 module docstring is fine):
 
 ```python
-# pymaxlines: disable=max-lines
 """This generated module is intentionally large."""
+# pymaxlines: disable=max-lines
 
 import re
 # ...
@@ -141,9 +146,10 @@ Separate several rules with commas: `# pymaxlines: disable=max-lines,max-lines-p
 A directive can share its `#` line with other comments:
 `def big_handler(...):  # noqa: C901  # pymaxlines: disable`.
 
-The directive prefix is lowercase `pymaxlines:` (with a colon). A wrong-case prefix
-(`PYMAXLINES:`, `PyMaxLines:`) or a missing colon (`pymaxlines disable`) is treated as a malformed
-directive and fails the run.
+Any `#` segment whose first word is `pymaxlines` (any case) is a directive attempt and must use the
+canonical `pymaxlines: <action>` form. `pymaxlines` rejects three near-misses and fails the run: a
+wrong-case prefix (`PYMAXLINES:`), a missing colon (`pymaxlines disable`), and a non-colon separator
+(`pymaxlines-disable`).
 
 Each rule is only valid at certain scopes:
 
@@ -160,10 +166,10 @@ line is a separate error —
 `# pymaxlines: disable=max-lines` on a `def` line fails with
 `rule 'max-lines' does not apply to a function; use max-lines-per-function`.
 
-Pass `--report-unused-disable-directives` to detect directives that suppress no findings. A
-directive for a disabled check (limit 0) is reported as unused. A bare `disable` is unused only
-when neither check would have fired. Directives with validation errors are never also reported as
-unused.
+Pass `--report-unused-disable-directives` to fail the run on directives that suppress no findings.
+`pymaxlines` reports a directive for a disabled check (limit 0) as unused. It reports a bare
+`disable` as unused only when neither check would have fired, and never reports a directive that
+already failed validation.
 
 ### What counts as a code line
 
@@ -174,6 +180,10 @@ By default (all `--skip-*` flags on):
 - Every other line counts once, including non-blank lines inside multi-line strings.
 - A function's count includes its `def` line and every code line up to the end of its body, nested
   functions included.
+- Methods, async functions, and nested functions are each checked against the per-function limit;
+  lambdas are not.
+- A function-level directive exempts only the function whose `def` line it sits on — a nested
+  function still needs its own directive.
 - Decorator lines count toward the file total but not toward the decorated function's count.
 
 Turning a `--skip-*` flag off (e.g. `--no-skip-blank-lines`) makes that category count toward both
@@ -183,10 +193,10 @@ file and function totals.
 
 ## Contributing
 
-Install [go-task](https://taskfile.dev) and [uv](https://docs.astral.sh/uv/), then run
-`task install` to sync dependencies and install the git hooks. `task --list` shows the full
-development workflow. `task check` runs every hook; `task test:matrix` runs the suite on each
-supported Python version.
+Install [Task](https://taskfile.dev), [uv](https://docs.astral.sh/uv/), and
+[dprint](https://dprint.dev/install/), then run `task install` to sync dependencies and install
+the git hooks. `task --list` shows the full development workflow. `task check` runs every hook;
+`task test:matrix` runs the suite on each supported Python version.
 
 ## License
 

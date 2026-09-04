@@ -20,21 +20,34 @@ INDENTED_CODE_LINE = "    x = 1\n"
 PLACEHOLDER = "FILE"
 
 
+def file_diagnostic(count: int, limit: int = MAX_LINES_SRC, path: str = PLACEHOLDER) -> str:
+    """Return the expected file-level diagnostic line for *path*."""
+    return f"{path}: {count} code lines (max {limit})"
+
+
+def function_diagnostic(
+    lineno: int,
+    name: str,
+    count: int,
+    limit: int = MAX_LINES_PER_FUNCTION,
+    path: str = PLACEHOLDER,
+) -> str:
+    """Return the expected per-function diagnostic line for *name* at *lineno*."""
+    return f"{path}:{lineno}: function '{name}' has {count} code lines (max {limit})"
+
+
+def make_oversized_function(*, body_lines: int = MAX_LINES_PER_FUNCTION + 1) -> tuple[str, int]:
+    """Return ``(source, code_line_count)`` for a ``def big()`` that exceeds the limit."""
+    source = "def big():\n" + INDENTED_CODE_LINE * body_lines
+    return source, body_lines + 1
+
+
 def write_module(tmp_path: Path, content: str, name: str = "module.py") -> Path:
+    """Write *content* to *name* under *tmp_path*, creating parent directories as needed."""
     path = tmp_path / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
     return path
-
-
-def oversized_file_and_function(directive: str) -> str:
-    return (
-        directive
-        + "def big():\n"
-        + INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION + 1)
-        + "\n"
-        + CODE_LINE * MAX_LINES_SRC
-    )
 
 
 def capture_main(argv: list[str]) -> tuple[int, str]:

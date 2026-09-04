@@ -9,11 +9,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Inline `# pymaxlines: disable` comments that exempt a file or a function from the checks instead
-  of raising the global limit.
-- Near-miss detection for directive comments with wrong case (`PYMAXLINES:`) or a missing colon
-  (`pymaxlines disable`), reported as malformed with the canonical form in the error message.
+- Inline `# pymaxlines: disable` comments that exempt a file or a function from the checks, with
+  malformed or misplaced directives reported as errors.
 - `--report-unused-disable-directives` flag to detect directives that suppress no findings.
+
+### Fixed
+
+- Oversized-function diagnostics now print in source order.
+- A broken stdout pipe (e.g. `pymaxlines files… | head -1`) now exits 1 cleanly instead of printing
+  a traceback.
+- A `def` or `class` header line that also carries an inline docstring (`def f(): "doc"`) is now
+  counted as a code line instead of being skipped as a docstring.
 
 ## [0.3.0] - 2026-09-03
 
