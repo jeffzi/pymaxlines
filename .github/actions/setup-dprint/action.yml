@@ -10,7 +10,7 @@ runs:
       shell: bash
       env:
         DPRINT_VERSION: "0.57.1"
-        DPRINT_SHA256: d7ccde62d789dfb048717252d259e21253e32feffe4cbf2dab9954eeab492219
+        DPRINT_SHA256: 4117443cc5fade617dd5f4850cc2fa6b2902136052ef313ee20947036c3554cc
       run: | # zizmor: ignore[github-env] — GITHUB_PATH entry is built from pinned literals in this file, not attacker-controlled input
         set -euo pipefail
         curl -fsSL -o dprint.zip "https://github.com/dprint/dprint/releases/download/${DPRINT_VERSION}/dprint-x86_64-unknown-linux-gnu.zip"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import errno
 import os
 import stat
 import sys
@@ -285,9 +286,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         for path in config.files:
             exit_code |= check_file(path, config)
-    except BrokenPipeError:
+    except OSError as exc:
+        # BrokenPipeError (EPIPE) on Unix; EINVAL on Windows when the reader
+        # closes the pipe.  Re-raise anything unrelated.
+        if not isinstance(exc, BrokenPipeError) and exc.errno != errno.EINVAL:
+            raise
         # Redirect the stdout fd to devnull so the interpreter shutdown flush
-        # cannot re-raise BrokenPipeError and print "Exception ignored".
+        # cannot re-raise and print "Exception ignored".
         # Only redirect when stdout is actually a pipe (FIFO); when the error
         # originates from a higher-level wrapper the fd itself is fine.
         try:
