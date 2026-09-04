@@ -50,7 +50,7 @@ repos:
         name: pymaxlines
         entry: uv run pymaxlines
         language: system
-        types: [python]
+        types_or: [python, pyi]
 
   # Python type checking
   - repo: local
