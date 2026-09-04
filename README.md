@@ -75,10 +75,9 @@ When the package is installed in an environment, `python -m pymaxlines` is equiv
 
 ## Usage
 
-The hook runs on `.py` and `.pyi` files. A file is a **test file** when the path passed on the
-command line contains a `tests/` component, or the filename matches `test_*.py`, `test_*.pyi`, or
-`*_test.py`. Everything else is a **source file**. The flag table below uses these terms in its
-"Applies to" column.
+The hook runs on `.py` files. A file is a **test file** when the path passed on the command line
+contains a `tests/` component, or the filename matches `test_*.py` or `*_test.py`. Everything else
+is a **source file**. The flag table below uses these terms in its "Applies to" column.
 
 Defaults, all overridable with flags:
 

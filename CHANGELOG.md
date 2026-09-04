@@ -13,6 +13,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   malformed or misplaced directives reported as errors.
 - `--report-unused-disable-directives` flag to detect directives that suppress no findings.
 
+### Removed
+
+- The `check-max-lines` hook no longer runs on `.pyi` stub files.
+
 ### Fixed
 
 - Oversized-function diagnostics now print in source order.

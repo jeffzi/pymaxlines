@@ -3,4 +3,4 @@
   description: Fail when a Python file or function exceeds a code-line limit.
   entry: pymaxlines
   language: python
-  types_or: [python, pyi]
+  types: [python]
