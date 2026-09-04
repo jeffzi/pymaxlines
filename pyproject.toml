@@ -55,7 +55,7 @@ malware-check = true
 
 [tool.pyrefly]
 preset = "strict"
-project-includes = ["src", "tests", "scripts"]
+project-includes = ["src", "tests"]
 python-version = "3.12"
 search-path = ["src", "tests"]
 
@@ -121,9 +121,9 @@ xfail_strict = true
 markers = ["e2e: end-to-end tests that clone external repositories (need --run-e2e to run)"]
 
 [tool.coverage.run]
+source = ["src"]
 branch = true
 parallel = true
-omit = ["tests/**/conftest.py"]
 
 [tool.coverage.report]
 exclude_lines = [
