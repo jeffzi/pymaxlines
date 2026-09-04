@@ -10,6 +10,8 @@
     "conftest",
     "devnull",
     "docstrings",
+    "EINVAL",
+    "EPIPE",
     "filterwarnings",
     "fstat",
     "htmlcov",
