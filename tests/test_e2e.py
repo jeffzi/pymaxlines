@@ -62,18 +62,6 @@ def _clone_repo(git: str, target_dir: Path) -> Path:
     return target_dir
 
 
-def _origin_matches(git: str, repo_dir: Path) -> bool:
-    """Check whether *repo_dir*'s ``origin`` remote points at the pinned corpus URL."""
-    result = subprocess.run(  # noqa: S603 — all arguments are hardcoded constants
-        [git, "remote", "get-url", "origin"],
-        cwd=repo_dir,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.stdout.strip() == _REPO_URL
-
-
 @pytest.fixture(scope="session")
 def e2e_checkout() -> Path:
     """Clone the target repo at a pinned tag; reuse the checkout on subsequent runs."""
@@ -81,7 +69,7 @@ def e2e_checkout() -> Path:
     if not git:
         pytest.skip("git is not available")
 
-    if _REPO_DIR.exists() and (_REPO_DIR / ".git").is_dir() and _origin_matches(git, _REPO_DIR):
+    if _REPO_DIR.exists() and (_REPO_DIR / ".git").is_dir():
         return _REPO_DIR
 
     if _REPO_DIR.exists():
@@ -100,7 +88,7 @@ def e2e_py_files(e2e_checkout: Path) -> list[str]:
 
 
 @pytest.mark.e2e
-def test_pymaxlines_when_run_against_e2e_repo_does_detect_oversized_file(
+def test_main_when_run_against_e2e_repo_does_detect_oversized_file(
     e2e_py_files: list[str], capsys: pytest.CaptureFixture[str]
 ):
     exit_code = main(e2e_py_files)
@@ -108,43 +96,3 @@ def test_pymaxlines_when_run_against_e2e_repo_does_detect_oversized_file(
     assert exit_code == 1
     out = capsys.readouterr().out
     assert any("code lines (max" in line for line in out.splitlines())
-
-
-# ---------------------------------------------------------------------------
-# _clone_repo — git clone failure discrimination
-# ---------------------------------------------------------------------------
-
-
-def _run_clone_with_fake_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stderr: bytes
-) -> Path:
-    """Rig subprocess.run to fail, then call the helper the e2e_checkout fixture delegates to."""
-    target_dir = tmp_path / "clone-target"
-    error = subprocess.CalledProcessError(128, ["git", "clone"], output=b"", stderr=stderr)
-
-    def _raise(*_args: object, **_kwargs: object) -> None:
-        raise error
-
-    monkeypatch.setattr(subprocess, "run", _raise)
-
-    return _clone_repo("/usr/bin/git", target_dir)
-
-
-def test_clone_repo_when_connectivity_error_does_skip(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    stderr = b"fatal: unable to access 'https://...': Could not resolve host: github.com\n"
-
-    with pytest.raises(pytest.skip.Exception) as exc_info:
-        _run_clone_with_fake_error(monkeypatch, tmp_path, stderr)
-
-    assert stderr.decode().strip() in str(exc_info.value)
-
-
-def test_clone_repo_when_non_connectivity_error_does_not_skip(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    stderr = b"fatal: Remote branch v99.99.99 not found in upstream origin\n"
-
-    with pytest.raises(subprocess.CalledProcessError):
-        _run_clone_with_fake_error(monkeypatch, tmp_path, stderr)

@@ -5,12 +5,10 @@ from __future__ import annotations
 import contextlib
 import io
 from pathlib import Path
-from typing import TYPE_CHECKING
+
+import pytest
 
 from pymaxlines import MAX_LINES_PER_FUNCTION, MAX_LINES_SRC, main
-
-if TYPE_CHECKING:
-    import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -20,8 +18,13 @@ INDENTED_CODE_LINE = "    x = 1\n"
 PLACEHOLDER = "FILE"
 
 
+def diagnostic(lineno: int, message: str, path: str = PLACEHOLDER) -> str:
+    """Return `path:lineno: message`, the shared diagnostic-line format."""
+    return f"{path}:{lineno}: {message}"
+
+
 def file_diagnostic(count: int, limit: int = MAX_LINES_SRC, path: str = PLACEHOLDER) -> str:
-    """Return the expected file-level diagnostic line for *path*."""
+    """Return the expected file-level diagnostic line: `path: count code lines (max limit)`."""
     return f"{path}: {count} code lines (max {limit})"
 
 
@@ -32,8 +35,8 @@ def function_diagnostic(
     limit: int = MAX_LINES_PER_FUNCTION,
     path: str = PLACEHOLDER,
 ) -> str:
-    """Return the expected per-function diagnostic line for *name* at *lineno*."""
-    return f"{path}:{lineno}: function '{name}' has {count} code lines (max {limit})"
+    """Return `path:lineno: function 'name' has count code lines (max limit)`."""
+    return diagnostic(lineno, f"function '{name}' has {count} code lines (max {limit})", path)
 
 
 def make_oversized_function(*, body_lines: int = MAX_LINES_PER_FUNCTION + 1) -> tuple[str, int]:
@@ -43,11 +46,16 @@ def make_oversized_function(*, body_lines: int = MAX_LINES_PER_FUNCTION + 1) -> 
 
 
 def write_module(tmp_path: Path, content: str, name: str = "module.py") -> Path:
-    """Write *content* to *name* under *tmp_path*, creating parent directories as needed."""
+    """Write *content* to `tmp_path/name`, creating parent directories as needed, and return the path."""
     path = tmp_path / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
     return path
+
+
+def write_code_lines(tmp_path: Path, count: int, name: str = "module.py") -> Path:
+    """Write *count* repetitions of `CODE_LINE` to `tmp_path/name` and return the path."""
+    return write_module(tmp_path, CODE_LINE * count, name)
 
 
 def capture_main(argv: list[str]) -> tuple[int, str]:
@@ -65,35 +73,18 @@ def run_check(file: Path, *extra_args: str) -> tuple[int, list[str]]:
     return exit_code, output.splitlines()
 
 
-# ---------------------------------------------------------------------------
-# pytest plugin: gate e2e-marked tests behind --run-e2e
-# ---------------------------------------------------------------------------
+def expect_exit_two(argv: list[str]) -> None:
+    """Run ``main(argv)`` and assert it raises ``SystemExit`` with code 2."""
+    with pytest.raises(SystemExit) as exc_info:
+        main(argv)
+    assert exc_info.value.code == 2
 
 
-def pytest_addoption(parser: pytest.Parser) -> None:
-    """Register the --run-e2e CLI flag."""
-    parser.addoption(
-        "--run-e2e",
-        action="store_true",
-        default=False,
-        help="Run tests decorated with @pytest.mark.e2e",
-    )
+@pytest.fixture(autouse=True)
+def _isolate_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run every test with cwd set to its tmp_path.
 
-
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Deselect e2e-marked tests unless --run-e2e was passed."""
-    if config.getoption("--run-e2e"):
-        return
-
-    remaining: list[pytest.Item] = []
-    deselected: list[pytest.Item] = []
-
-    for item in items:
-        if any(item.iter_markers(name="e2e")):
-            deselected.append(item)
-        else:
-            remaining.append(item)
-
-    if deselected:
-        config.hook.pytest_deselected(items=deselected)
-        items[:] = remaining
+    Prevents in-process ``main()`` from reading the repo's own
+    ``pyproject.toml`` or classifying paths against the repo root.
+    """
+    monkeypatch.chdir(tmp_path)
