@@ -660,6 +660,9 @@ def test_main_when_stdout_closed_mid_run_does_exit_one_without_traceback(
         assert proc.stdout is not None
         proc.stdout.readline()
         proc.stdout.close()
+        # On Windows, communicate() spawns a reader thread per open pipe;
+        # a closed-but-non-None stdout crashes that thread.
+        proc.stdout = None
         _, stderr = proc.communicate(timeout=30)
 
     assert proc.returncode == 1
