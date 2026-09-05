@@ -25,7 +25,14 @@ from conftest import (
 
 from pymaxlines import MAX_LINES_SRC
 
-_HOOK_REPO = REPO_ROOT
+_CONNECTIVITY_SIGNATURES = (
+    "Could not resolve host",
+    "unable to access",
+    "Connection timed out",
+    "Connection refused",
+    "Failed to connect",
+    "index server",
+)
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -47,8 +54,8 @@ def git_repo(tmp_path: Path) -> Iterator[Path]:
     impossible and causing exit code 3.
     """
     with contextlib.ExitStack() as stack:
-        if tmp_path.anchor != _HOOK_REPO.anchor:
-            work = Path(stack.enter_context(tempfile.TemporaryDirectory(dir=_HOOK_REPO.parent)))
+        if tmp_path.anchor != REPO_ROOT.anchor:
+            work = Path(stack.enter_context(tempfile.TemporaryDirectory(dir=REPO_ROOT.parent)))
         else:
             work = tmp_path
 
@@ -70,22 +77,30 @@ def _run_hook(repo: Path) -> subprocess.CompletedProcess[str]:
     # Strip pytest-cov's COV_CORE_* vars so the pre-commit subprocess doesn't
     # start its own coverage collector and corrupt the parent's data.
     env = {k: v for k, v in os.environ.items() if not k.startswith("COV_CORE")}
-    return subprocess.run(  # noqa: S603 — fixed interpreter and args, no shell
-        [
-            sys.executable,
-            "-m",
-            "pre_commit",
-            "try-repo",
-            str(_HOOK_REPO),
-            "check-max-lines",
-            "--all-files",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        cwd=repo,
-        env=env,
-    )
+    try:
+        result = subprocess.run(  # noqa: S603 — fixed interpreter and args, no shell
+            [
+                sys.executable,
+                "-m",
+                "pre_commit",
+                "try-repo",
+                str(REPO_ROOT),
+                "check-max-lines",
+                "--all-files",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=repo,
+            env=env,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("pre-commit try-repo timed out")
+    combined = result.stdout + result.stderr
+    if any(sig in combined for sig in _CONNECTIVITY_SIGNATURES):
+        pytest.skip(f"network: {combined.strip()[:200]}")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +108,7 @@ def _run_hook(repo: Path) -> subprocess.CompletedProcess[str]:
 # ---------------------------------------------------------------------------
 
 
-def test_hook_when_files_within_limit_does_pass(git_repo: Path) -> None:
+def test_hook_when_py_within_limit_and_oversized_non_py_staged_does_pass(git_repo: Path) -> None:
     _stage(git_repo, "module.py", CODE_LINE * MAX_LINES_SRC)
     _stage(git_repo, "data.txt", CODE_LINE * (MAX_LINES_SRC + 1))
 
