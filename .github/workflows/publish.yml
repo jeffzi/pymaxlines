@@ -8,9 +8,13 @@ permissions: {}
 
 jobs:
   lint:
+    permissions:
+      contents: read
     uses: ./.github/workflows/prek.yml # zizmor: ignore[self-repository] — actionlint rejects $/
 
   test:
+    permissions:
+      contents: read
     uses: ./.github/workflows/pytest.yml # zizmor: ignore[self-repository] — actionlint rejects $/
 
   build:
