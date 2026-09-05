@@ -6,8 +6,8 @@ import pytest
 from conftest import (
     CODE_LINE,
     INDENTED_CODE_LINE,
-    PLACEHOLDER,
     capture_main,
+    diagnostic,
     file_diagnostic,
     function_diagnostic,
     make_oversized_function,
@@ -45,14 +45,14 @@ def _misplaced(directive_lineno: int, def_lineno: int, code_count: int) -> tuple
     return (
         1,
         [
-            f"{PLACEHOLDER}:{directive_lineno}: {_MISPLACED_MSG}",
+            diagnostic(directive_lineno, _MISPLACED_MSG),
             function_diagnostic(def_lineno, "big", code_count),
         ],
     )
 
 
 def _unknown_rule(lineno: int, rule: str = "banana") -> str:
-    return f"{PLACEHOLDER}:{lineno}: unknown rule '{rule}' in pymaxlines directive"
+    return diagnostic(lineno, f"unknown rule '{rule}' in pymaxlines directive")
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +255,7 @@ def test_main_when_directive_is_malformed_does_report_malformed(tmp_path: Path, 
     exit_code, lines = run_check(file)
 
     assert exit_code == 1
-    assert lines == [f"{PLACEHOLDER}:1: {_MALFORMED_MSG}"]
+    assert lines == [diagnostic(1, _MALFORMED_MSG)]
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +297,7 @@ def test_main_when_directive_is_misplaced_does_report_misplaced(
     exit_code, lines = run_check(file)
 
     assert exit_code == 1
-    assert lines == [f"{PLACEHOLDER}:{expected_lineno}: {_MISPLACED_MSG}"]
+    assert lines == [diagnostic(expected_lineno, _MISPLACED_MSG)]
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +331,7 @@ def test_main_when_def_has_disable_max_lines_does_report_wrong_scope(
     exit_code, lines = run_check(file)
 
     assert exit_code == 1
-    assert lines == [f"{PLACEHOLDER}:1: {_WRONG_SCOPE_MSG}"]
+    assert lines == [diagnostic(1, _WRONG_SCOPE_MSG)]
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +344,7 @@ def test_main_when_def_has_disable_max_lines_does_report_wrong_scope(
     [
         pytest.param(
             "x = 1  # pymaxlines: enable\n",
-            f"{PLACEHOLDER}:1: {_MALFORMED_MSG}",
+            diagnostic(1, _MALFORMED_MSG),
             id="malformed-syntax",
         ),
         pytest.param(
@@ -546,7 +546,7 @@ def test_main_when_directive_placed_on_def_construct_does_apply_placement_rules(
     assert (exit_code, lines) == expected
 
 
-def test_placement_contract_when_nested_def_has_directive_does_exempt_only_nested(
+def test_main_when_nested_def_has_directive_does_exempt_only_nested(
     tmp_path: Path,
 ) -> None:
     body_count = MAX_LINES_PER_FUNCTION + 1
@@ -568,7 +568,7 @@ def test_placement_contract_when_nested_def_has_directive_does_exempt_only_neste
 
 
 # ---------------------------------------------------------------------------
-# contract gaps (T3)
+# multiple bad directives — reported in source order
 # ---------------------------------------------------------------------------
 
 
@@ -582,7 +582,7 @@ def test_main_when_file_has_multiple_bad_directives_does_report_all_in_source_or
 
     assert exit_code == 1
     assert lines == [
-        f"{PLACEHOLDER}:1: {_MALFORMED_MSG}",
+        diagnostic(1, _MALFORMED_MSG),
         _unknown_rule(2),
     ]
 
@@ -641,7 +641,7 @@ def test_main_when_report_flag_and_def_directive_suppresses_nothing_does_report_
     exit_code, lines = _run_check_unused(file)
 
     assert exit_code == 1
-    assert lines == [f"{PLACEHOLDER}:1: {_UNUSED_MSG}"]
+    assert lines == [diagnostic(1, _UNUSED_MSG)]
 
 
 # ---------------------------------------------------------------------------
@@ -657,6 +657,7 @@ def test_main_when_report_flag_and_def_directive_suppresses_nothing_does_report_
             "# pymaxlines: disable=max-lines-per-function\n",
             id="max-lines-per-function-no-violations",
         ),
+        pytest.param("# pymaxlines: disable\n", id="bare-disable"),
     ],
 )
 def test_main_when_report_flag_and_file_scope_single_rule_suppresses_nothing_does_report_unused(
@@ -668,43 +669,26 @@ def test_main_when_report_flag_and_file_scope_single_rule_suppresses_nothing_doe
     exit_code, lines = _run_check_unused(file)
 
     assert exit_code == 1
-    assert lines == [f"{PLACEHOLDER}:1: {_UNUSED_MSG}"]
+    assert lines == [diagnostic(1, _UNUSED_MSG)]
 
 
-# ---------------------------------------------------------------------------
-# behavior 4: bare file-scope disable reported only when both checks clean
-# ---------------------------------------------------------------------------
-
-
-def test_main_when_report_flag_and_bare_disable_with_no_findings_does_report_unused(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(
+            "# pymaxlines: disable\n" + CODE_LINE * (MAX_LINES_SRC + 1),
+            id="suppresses-file-finding",
+        ),
+        pytest.param(
+            "# pymaxlines: disable\ndef big():\n"
+            + INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION + 1),
+            id="suppresses-function-finding",
+        ),
+    ],
+)
+def test_main_when_report_flag_and_bare_disable_suppresses_finding_does_not_report_unused(
+    tmp_path: Path, content: str
 ) -> None:
-    content = "# pymaxlines: disable\n" + CODE_LINE * 5
-    file = write_module(tmp_path, content)
-
-    exit_code, lines = _run_check_unused(file)
-
-    assert exit_code == 1
-    assert lines == [f"{PLACEHOLDER}:1: {_UNUSED_MSG}"]
-
-
-def test_main_when_report_flag_and_bare_disable_suppresses_file_finding_does_not_report_unused(
-    tmp_path: Path,
-) -> None:
-    content = "# pymaxlines: disable\n" + CODE_LINE * (MAX_LINES_SRC + 1)
-    file = write_module(tmp_path, content)
-
-    exit_code, lines = _run_check_unused(file)
-
-    assert (exit_code, lines) == (0, [])
-
-
-def test_main_when_report_flag_and_bare_disable_suppresses_function_finding_does_not_report_unused(
-    tmp_path: Path,
-) -> None:
-    content = "# pymaxlines: disable\ndef big():\n" + INDENTED_CODE_LINE * (
-        MAX_LINES_PER_FUNCTION + 1
-    )
     file = write_module(tmp_path, content)
 
     exit_code, lines = _run_check_unused(file)
@@ -726,7 +710,7 @@ def test_main_when_report_flag_and_disable_for_zero_limit_rule_does_report_unuse
     exit_code, lines = _run_check_unused(file)
 
     assert exit_code == 1
-    assert lines == [f"{PLACEHOLDER}:1: {_UNUSED_MSG}"]
+    assert lines == [diagnostic(1, _UNUSED_MSG)]
 
 
 # ---------------------------------------------------------------------------
@@ -753,8 +737,8 @@ def test_main_when_report_flag_and_mixed_findings_does_print_unused_after_limit_
     assert exit_code == 1
     assert lines == [
         function_diagnostic(big_lineno, "big", big_total),
-        f"{PLACEHOLDER}:1: {_UNUSED_MSG}",
-        f"{PLACEHOLDER}:2: {_UNUSED_MSG}",
+        diagnostic(1, _UNUSED_MSG),
+        diagnostic(2, _UNUSED_MSG),
     ]
 
 
@@ -764,54 +748,39 @@ def test_main_when_report_flag_and_mixed_findings_does_print_unused_after_limit_
 
 
 @pytest.mark.parametrize(
-    ("directive_line", "expected_msg"),
+    ("content", "expected_msg"),
     [
         pytest.param(
-            "# pymaxlines: enable\n",
-            f"{PLACEHOLDER}:1: {_MALFORMED_MSG}",
+            "# pymaxlines: enable\n" + CODE_LINE * 5,
+            diagnostic(1, _MALFORMED_MSG),
             id="malformed",
         ),
         pytest.param(
-            "# pymaxlines: disable=banana\n",
+            "# pymaxlines: disable=banana\n" + CODE_LINE * 5,
             _unknown_rule(1),
             id="unknown-rule",
+        ),
+        pytest.param(
+            "x = 1\n# pymaxlines: disable=max-lines\n" + CODE_LINE * 5,
+            diagnostic(2, _MISPLACED_MSG),
+            id="misplaced",
+        ),
+        pytest.param(
+            "def small():  # pymaxlines: disable=max-lines\n    x = 1\n",
+            diagnostic(1, _WRONG_SCOPE_MSG),
+            id="wrong-scope",
         ),
     ],
 )
 def test_main_when_report_flag_and_directive_has_error_does_not_also_report_unused(
-    tmp_path: Path, directive_line: str, expected_msg: str
+    tmp_path: Path, content: str, expected_msg: str
 ) -> None:
-    content = directive_line + CODE_LINE * 5
     file = write_module(tmp_path, content)
 
     exit_code, lines = _run_check_unused(file)
 
     assert exit_code == 1
     assert lines == [expected_msg]
-
-
-def test_main_when_report_flag_and_misplaced_directive_does_not_also_report_unused(
-    tmp_path: Path,
-) -> None:
-    content = "x = 1\n# pymaxlines: disable=max-lines\n" + CODE_LINE * 5
-    file = write_module(tmp_path, content)
-
-    exit_code, lines = _run_check_unused(file)
-
-    assert exit_code == 1
-    assert lines == [f"{PLACEHOLDER}:2: {_MISPLACED_MSG}"]
-
-
-def test_main_when_report_flag_and_wrong_scope_directive_does_not_also_report_unused(
-    tmp_path: Path,
-) -> None:
-    content = "def small():  # pymaxlines: disable=max-lines\n    x = 1\n"
-    file = write_module(tmp_path, content)
-
-    exit_code, lines = _run_check_unused(file)
-
-    assert exit_code == 1
-    assert lines == [f"{PLACEHOLDER}:1: {_WRONG_SCOPE_MSG}"]
 
 
 # ---------------------------------------------------------------------------
@@ -839,7 +808,7 @@ def test_main_when_report_flag_and_wrong_scope_directive_does_not_also_report_un
         ),
         pytest.param(
             "@decorator\n# pymaxlines: disable\nclass C:\n    pass\n",
-            (1, [f"{PLACEHOLDER}:2: {_MISPLACED_MSG}"]),
+            (1, [diagnostic(2, _MISPLACED_MSG)]),
             id="class-comment-between-decorator-and-class",
         ),
         pytest.param(
@@ -852,6 +821,24 @@ def test_main_when_report_flag_and_wrong_scope_directive_does_not_also_report_un
             _EXEMPT,
             id="func-comment-after-docstring-before-decorator",
         ),
+        pytest.param(
+            "@(\n    " + _DISABLE + "\n    wrapper\n)\ndef big():\n" + _OVERSIZED_BODY,
+            _misplaced(2, 5, _OVERSIZED_COUNT),
+            id="func-comment-inside-paren-wrapped-decorator",
+        ),
+        pytest.param(
+            _DISABLE + "\n@(\n    wrapper\n)\ndef big():\n" + _OVERSIZED_BODY,
+            _EXEMPT,
+            id="func-comment-before-paren-wrapped-decorator",
+        ),
+        pytest.param(
+            '"""Module docstring."""\n'
+            + _DISABLE
+            + "\n@(\n    wrapper\n)\ndef big():\n"
+            + _OVERSIZED_BODY,
+            _EXEMPT,
+            id="func-comment-after-docstring-before-paren-wrapped-decorator",
+        ),
     ],
 )
 def test_main_when_decorated_first_stmt_has_comment_directive_does_apply_decorator_boundary(
@@ -862,3 +849,68 @@ def test_main_when_decorated_first_stmt_has_comment_directive_does_apply_decorat
     exit_code, lines = run_check(file)
 
     assert (exit_code, lines) == expected
+
+
+# ---------------------------------------------------------------------------
+# near-miss segment after (or before) a valid directive on the same line
+# ---------------------------------------------------------------------------
+
+_DUPLICATE_MSG = (
+    "only one pymaxlines directive is allowed per line;"
+    " combine rules with commas: '# pymaxlines: disable=rule1,rule2'"
+)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(
+            "# pymaxlines: disable  # pymaxlines-disable\n",
+            id="valid-then-near-miss",
+        ),
+        pytest.param(
+            "# pymaxlines-disable  # pymaxlines: disable\n",
+            id="near-miss-then-valid",
+        ),
+    ],
+)
+def test_main_when_valid_and_near_miss_on_same_line_does_report_malformed(
+    tmp_path: Path, line: str
+) -> None:
+    content = line + CODE_LINE * 5
+    file = write_module(tmp_path, content)
+
+    exit_code, lines = run_check(file)
+
+    assert exit_code == 1
+    assert lines == [diagnostic(1, _MALFORMED_MSG)]
+
+
+# ---------------------------------------------------------------------------
+# two pymaxlines: directives on the same line
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(
+            "# pymaxlines: disable=max-lines  # pymaxlines: disable=max-lines-per-function\n",
+            id="two-different-rules",
+        ),
+        pytest.param(
+            "# pymaxlines: disable  # pymaxlines: disable=max-lines\n",
+            id="bare-then-specific",
+        ),
+    ],
+)
+def test_main_when_two_pymaxlines_directives_on_same_line_does_report_duplicate(
+    tmp_path: Path, line: str
+) -> None:
+    content = line + CODE_LINE * 5
+    file = write_module(tmp_path, content)
+
+    exit_code, lines = run_check(file)
+
+    assert exit_code == 1
+    assert lines == [diagnostic(1, _DUPLICATE_MSG)]

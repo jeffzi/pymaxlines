@@ -5,12 +5,9 @@ from __future__ import annotations
 import ast
 import io
 import tokenize
-from dataclasses import dataclass
+from collections.abc import Mapping  # noqa: TC003 — runtime-resolvable for typing.get_type_hints
+from dataclasses import dataclass, field
 from operator import attrgetter
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from collections.abc import Collection
 
 NON_CODE_TOKENS = frozenset(
     {
@@ -36,6 +33,10 @@ DOCSTRING_CONTAINERS = (ast.Module, ast.ClassDef, *FUNCTION_DEF_TYPES)
 
 
 def is_docstring_stmt(stmt: ast.stmt) -> bool:
+    """True when *stmt* is a bare string-literal expression statement.
+
+    That is the AST shape of a docstring.
+    """
     return (
         isinstance(stmt, ast.Expr)
         and isinstance(stmt.value, ast.Constant)
@@ -61,11 +62,55 @@ def docstring_lines(tree: ast.Module) -> set[int]:
     return lines
 
 
+@dataclass(slots=True)
+class _HeaderTracker:
+    """Tracks a ``def`` header from the ``def`` keyword through its closing ``:``.
+
+    Feed every token in source order; ``header_ranges`` accumulates the
+    line-to-``def``-line mapping as headers close.
+    """
+
+    header_ranges: dict[int, int] = field(default_factory=dict)
+    in_header: bool = False
+    def_line: int = 0
+    depth: int = 0
+
+    def feed(self, token: tokenize.TokenInfo) -> None:
+        if token.type == tokenize.NAME and token.string == "def":
+            self.in_header = True
+            self.def_line = token.start[0]
+            self.depth = 0
+        elif self.in_header and token.type == tokenize.OP:
+            if token.string in OPEN_BRACKETS:
+                self.depth += 1
+            elif token.string in CLOSE_BRACKETS:
+                self.depth -= 1
+            elif token.string == ":" and self.depth == 0:
+                for line in range(self.def_line, token.start[0] + 1):
+                    self.header_ranges[line] = self.def_line
+                self.in_header = False
+
+
 @dataclass(frozen=True, slots=True)
 class TokenScan:
+    """Result of a single tokenizer pass over a source file.
+
+    - ``comment_only_lines``: lines carrying a COMMENT token but no code token.
+    - ``comments``: every ``(line, text)`` comment token in source order.
+    - ``header_ranges``: maps every line of a ``def`` header (from the ``def``
+      keyword through its closing ``:``) to the ``def`` line number.
+    - ``code_bearing_lines``: lines carrying a token that is not blank/comment/
+      structural noise and not a bare string, used to tell a bare docstring
+      line from one that also carries code.
+    - ``decorator_at_lines``: the line of each ``@`` OP token that opens a
+      logical line (i.e. a decorator prefix, not matrix-multiply).
+    """
+
     comment_only_lines: frozenset[int]
     comments: tuple[tuple[int, str], ...]
-    header_ranges: dict[int, int]
+    header_ranges: Mapping[int, int]
+    code_bearing_lines: frozenset[int]
+    decorator_at_lines: frozenset[int]
 
 
 def scan_tokens(source: str) -> TokenScan:
@@ -76,58 +121,63 @@ def scan_tokens(source: str) -> TokenScan:
     Header ranges map every line from a ``def`` keyword through the first
     ``:`` at zero bracket depth to the ``def`` line number, so directive
     placement can be checked without AST end-position heuristics.
+
+    ``code_bearing_lines`` collects the lines carrying a token outside
+    ``_DOCSTRING_SKIP_IGNORED_TOKENS`` (i.e. excluding strings too), so
+    ``code_line_numbers`` can tell a bare docstring line from one that also
+    carries code without re-tokenizing the source.
     """
     comment_lines: set[int] = set()
-    code_lines: set[int] = set()
+    non_comment_token_lines: set[int] = set()
+    code_bearing_lines: set[int] = set()
     comments: list[tuple[int, str]] = []
-
-    header_ranges: dict[int, int] = {}
-    in_header = False
-    def_line = 0
-    depth = 0
+    decorator_at: set[int] = set()
+    header = _HeaderTracker()
+    at_logical_line_start = True
 
     for token in tokenize.generate_tokens(io.StringIO(source).readline):
         if token.type == tokenize.COMMENT:
             comment_lines.add(token.start[0])
             comments.append((token.start[0], token.string))
+        elif token.type == tokenize.NEWLINE:
+            at_logical_line_start = True
         elif token.type not in NON_CODE_TOKENS:
-            code_lines.update(range(token.start[0], token.end[0] + 1))
+            if at_logical_line_start and token.type == tokenize.OP and token.string == "@":
+                decorator_at.add(token.start[0])
+            at_logical_line_start = False
+            non_comment_token_lines.update(range(token.start[0], token.end[0] + 1))
 
-        if token.type == tokenize.NAME and token.string == "def":
-            in_header = True
-            def_line = token.start[0]
-            depth = 0
-        elif in_header and token.type == tokenize.OP:
-            if token.string in OPEN_BRACKETS:
-                depth += 1
-            elif token.string in CLOSE_BRACKETS:
-                depth -= 1
-            elif token.string == ":" and depth == 0:
-                for line in range(def_line, token.start[0] + 1):
-                    header_ranges[line] = def_line
-                in_header = False
+        if token.type not in _DOCSTRING_SKIP_IGNORED_TOKENS:
+            code_bearing_lines.update(range(token.start[0], token.end[0] + 1))
+
+        header.feed(token)
 
     return TokenScan(
-        comment_only_lines=frozenset(comment_lines - code_lines),
+        comment_only_lines=frozenset(comment_lines - non_comment_token_lines),
         comments=tuple(comments),
-        header_ranges=header_ranges,
+        header_ranges=header.header_ranges,
+        code_bearing_lines=frozenset(code_bearing_lines),
+        decorator_at_lines=frozenset(decorator_at),
     )
 
 
 def code_line_numbers(
     source: str,
     tree: ast.Module,
+    scan: TokenScan,
     *,
     skip_blank_lines: bool,
-    skip_comment_lines: Collection[int],
     skip_docstrings: bool,
 ) -> set[int]:
     """Return the set of 1-indexed line numbers counted as code.
 
     Blank lines, comment-only lines, and docstring lines are optionally
-    excluded.  A docstring line is only skipped when it carries no other
-    code token on the same line (e.g. a closing delimiter followed by an
-    assignment is kept).
+    excluded.  Comment-only lines are taken from *scan*; callers that do
+    not want to skip comments pass a scan with an empty
+    ``comment_only_lines``.  A docstring line is only skipped when it
+    carries no other code token on the same line (e.g. a closing
+    delimiter followed by an assignment is kept) — determined by
+    ``scan.code_bearing_lines``.
     """
     lines = source.split("\n")
     if lines[-1] == "":
@@ -137,20 +187,18 @@ def code_line_numbers(
     skip: set[int] = set()
     if skip_blank_lines:
         skip.update(i for i, line in enumerate(lines, 1) if not line.strip())
-    skip.update(skip_comment_lines)
+    skip.update(scan.comment_only_lines)
     if skip_docstrings:
         ds_lines = docstring_lines(tree)
-        code_token_lines: set[int] = set()
-        for token in tokenize.generate_tokens(io.StringIO(source).readline):
-            if token.type not in _DOCSTRING_SKIP_IGNORED_TOKENS:
-                code_token_lines.update(range(token.start[0], token.end[0] + 1))
-        skip.update(ds_lines - code_token_lines)
+        skip.update(ds_lines - scan.code_bearing_lines)
 
     return all_line_numbers - skip
 
 
 @dataclass(frozen=True, slots=True)
 class OversizedFunction:
+    """A function whose code-line count exceeded the configured limit."""
+
     name: str
     lineno: int
     count: int
@@ -163,6 +211,14 @@ def oversized_functions(
     *,
     exempt_lines: frozenset[int] = frozenset(),
 ) -> list[OversizedFunction]:
+    """Find functions and async functions whose code-line count exceeds *limit*.
+
+    A function's line count is the number of *code_lines* falling within its
+    ``[lineno, end_lineno]`` span, so it reflects whatever counting rules
+    (blank/comment/docstring skipping) the caller baked into *code_lines*.
+    Functions whose ``def`` line is in *exempt_lines* are skipped entirely.
+    Results are sorted by line number.
+    """
     oversized: list[OversizedFunction] = []
     for node in ast.walk(tree):
         if not isinstance(node, FUNCTION_DEF_TYPES):

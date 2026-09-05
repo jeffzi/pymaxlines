@@ -12,30 +12,26 @@ if TYPE_CHECKING:
     import ast
     from pathlib import Path
 
+    from pymaxlines._lines import TokenScan
+
 
 @dataclass(frozen=True, slots=True)
 class RuleEffect:
+    """What a rule disables and where its directive is allowed to apply."""
+
     disables_file_check: bool
     disables_function_check: bool
-    applies_at_def_scope: bool
 
 
 RULE_REGISTRY: dict[str, RuleEffect] = {
-    "max-lines": RuleEffect(
-        disables_file_check=True, disables_function_check=False, applies_at_def_scope=False
-    ),
-    "max-lines-per-function": RuleEffect(
-        disables_file_check=False, disables_function_check=True, applies_at_def_scope=True
-    ),
+    "max-lines": RuleEffect(disables_file_check=True, disables_function_check=False),
+    "max-lines-per-function": RuleEffect(disables_file_check=False, disables_function_check=True),
 }
 
 KNOWN_RULES = frozenset(RULE_REGISTRY)
 RULES_DISABLING_FILE = frozenset(r for r, e in RULE_REGISTRY.items() if e.disables_file_check)
 RULES_DISABLING_FUNCTIONS = frozenset(
     r for r, e in RULE_REGISTRY.items() if e.disables_function_check
-)
-_FUNCTION_APPLICABLE_RULES = frozenset(
-    r for r, e in RULE_REGISTRY.items() if e.applies_at_def_scope
 )
 
 PYMAXLINES_RE = re.compile(r"pymaxlines\s*:\s*(.*)")
@@ -47,11 +43,26 @@ MALFORMED_MSG = (
     " expected '# pymaxlines: disable' or '# pymaxlines: disable=<rule>[,<rule>]'"
 )
 
-UNUSED_MSG = "unused pymaxlines-disable directive (no findings were reported)"
+DUPLICATE_MSG = (
+    "only one pymaxlines directive is allowed per line;"
+    " combine rules with commas: '# pymaxlines: disable=rule1,rule2'"
+)
+
+MISPLACED_MSG = (
+    "misplaced pymaxlines directive;"
+    " put it on a comment-only line before the first statement"
+    " or on a def header line"
+)
 
 
 @dataclass(frozen=True, slots=True)
 class ValidDirective:
+    """A directive comment that parsed and landed in a permitted location.
+
+    ``def_line`` is ``None`` for a file-scope directive and set to the line
+    of the exempted function's header for a def-scope directive.
+    """
+
     lineno: int
     rules: frozenset[str]
     def_line: int | None
@@ -59,6 +70,14 @@ class ValidDirective:
 
 @dataclass(frozen=True, slots=True)
 class DirectiveResult:
+    """The outcome of parsing every directive comment in a file.
+
+    Combines the file- and function-level suppressions in effect, the
+    def lines exempted individually, every diagnostic string produced
+    for malformed, unknown, or misplaced directives, and every directive
+    that parsed successfully.
+    """
+
     skip_file_check: bool
     skip_all_functions: bool
     exempt_def_lines: frozenset[int]
@@ -71,6 +90,7 @@ class DirectiveError(Exception):
 
 
 def diagnostic(path: Path, lineno: int, message: str) -> str:
+    """Format *message* as a ``path:lineno: message`` diagnostic string."""
     return f"{path}:{lineno}: {message}"
 
 
@@ -78,27 +98,59 @@ def find_pymaxlines_segment(comment_text: str, path: Path, lineno: int) -> str |
     """Extract the ``pymaxlines:`` segment from a ``#``-delimited comment.
 
     Raises ``DirectiveError`` when the comment looks like a directive attempt
-    but uses wrong case or omits the colon (near-miss).
+    but uses wrong case or omits the colon (near-miss), when multiple
+    ``pymaxlines:`` segments appear on the same line, or when a near-miss
+    coexists with a valid directive.
     """
+    matches: list[str] = []
+    has_near_miss = False
+
     for part in comment_text.split("#"):
         stripped = part.strip()
         match = PYMAXLINES_RE.match(stripped)
         if match:
-            return match.group(1).strip()
-        if PYMAXLINES_ATTEMPT_RE.match(stripped):
-            raise DirectiveError(diagnostic(path, lineno, MALFORMED_MSG))
+            matches.append(match.group(1).strip())
+        elif PYMAXLINES_ATTEMPT_RE.match(stripped):
+            has_near_miss = True
+
+    if has_near_miss:
+        raise DirectiveError(diagnostic(path, lineno, MALFORMED_MSG))
+    if len(matches) > 1:
+        raise DirectiveError(diagnostic(path, lineno, DUPLICATE_MSG))
+    if matches:
+        return matches[0]
     return None
 
 
-def first_statement_line(tree: ast.Module) -> int | None:
-    for i, stmt in enumerate(tree.body):
-        if i == 0 and is_docstring_stmt(stmt):
-            continue
-        decorators: list[ast.expr] = getattr(stmt, "decorator_list", [])
-        if decorators:
-            return min(stmt.lineno, decorators[0].lineno)
-        return stmt.lineno
-    return None
+def first_statement_line(
+    tree: ast.Module,
+    decorator_at_lines: frozenset[int] = frozenset(),
+) -> int | None:
+    r"""Return the line of the module's first real statement, skipping a module docstring.
+
+    When the first statement is decorated, the earliest ``@`` token line
+    (from the tokenizer) between any module docstring and the ``def``/``class``
+    keyword is used instead of the AST decorator expression's ``lineno``.
+    This handles parenthesized decorators like ``@(\n    expr\n)`` where
+    the expression node sits on a later line than the ``@``.
+
+    Returns ``None`` when the module has no statements (an empty file, or a
+    file containing only a docstring).
+    """
+    body = tree.body
+    if body and is_docstring_stmt(body[0]):
+        docstring_end = body[0].end_lineno or body[0].lineno
+        body = body[1:]
+    else:
+        docstring_end = 0
+    if not body:
+        return None
+    stmt = body[0]
+    stmt_line = stmt.lineno
+    relevant = {line for line in decorator_at_lines if docstring_end < line <= stmt_line}
+    if relevant:
+        return min(relevant)
+    return stmt_line
 
 
 def validate_directive(directive_text: str, path: Path, lineno: int) -> list[str] | None:
@@ -131,10 +183,10 @@ def function_scope_error(rules: list[str] | None, path: Path, lineno: int) -> No
     """Raise ``DirectiveError`` if any rule does not apply at def scope."""
     if rules is None:
         return
-    invalid_rules = [r for r in rules if r not in _FUNCTION_APPLICABLE_RULES]
+    invalid_rules = [r for r in rules if r not in RULES_DISABLING_FUNCTIONS]
     if not invalid_rules:
         return
-    applicable = ", ".join(sorted(_FUNCTION_APPLICABLE_RULES))
+    applicable = ", ".join(sorted(RULES_DISABLING_FUNCTIONS))
     raise DirectiveError(
         diagnostic(
             path,
@@ -145,10 +197,8 @@ def function_scope_error(rules: list[str] | None, path: Path, lineno: int) -> No
 
 
 def parse_directives(
-    comments: tuple[tuple[int, str], ...],
-    comment_only: frozenset[int],
+    scan: TokenScan,
     tree: ast.Module,
-    header_ranges: dict[int, int],
     path: Path,
 ) -> DirectiveResult:
     """Classify each comment as a def-scope, file-scope, or misplaced directive.
@@ -159,7 +209,7 @@ def parse_directives(
     is misplaced.  Malformed or unknown-rule directives are collected as error
     strings rather than raising, so a single pass reports every problem.
     """
-    first_stmt = first_statement_line(tree)
+    first_stmt = first_statement_line(tree, scan.decorator_at_lines)
 
     skip_file = False
     skip_all_functions = False
@@ -167,7 +217,7 @@ def parse_directives(
     errors: list[str] = []
     valid: list[ValidDirective] = []
 
-    for lineno, text in comments:
+    for lineno, text in scan.comments:
         try:
             directive_text = find_pymaxlines_segment(text, path, lineno)
             if directive_text is None:
@@ -176,14 +226,16 @@ def parse_directives(
 
             effective = frozenset(rules) if rules is not None else KNOWN_RULES
 
-            def_line = header_ranges.get(lineno)
-            if def_line is not None and lineno not in comment_only:
+            def_line = scan.header_ranges.get(lineno)
+            if def_line is not None and lineno not in scan.comment_only_lines:
                 function_scope_error(rules, path, lineno)
                 exempt.add(def_line)
                 valid.append(ValidDirective(lineno=lineno, rules=effective, def_line=def_line))
                 continue
 
-            is_file_scope = lineno in comment_only and (first_stmt is None or lineno < first_stmt)
+            is_file_scope = lineno in scan.comment_only_lines and (
+                first_stmt is None or lineno < first_stmt
+            )
             if is_file_scope:
                 skip_file = skip_file or bool(effective & RULES_DISABLING_FILE)
                 skip_all_functions = skip_all_functions or bool(
@@ -192,18 +244,9 @@ def parse_directives(
                 valid.append(ValidDirective(lineno=lineno, rules=effective, def_line=None))
                 continue
 
-            errors.append(
-                diagnostic(
-                    path,
-                    lineno,
-                    "misplaced pymaxlines directive;"
-                    " put it on a comment-only line before the first statement"
-                    " or on a def header line",
-                )
-            )
+            errors.append(diagnostic(path, lineno, MISPLACED_MSG))
         except DirectiveError as exc:
             errors.append(str(exc))
-            continue
 
     return DirectiveResult(
         skip_file_check=skip_file,

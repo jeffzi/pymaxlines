@@ -1,31 +1,30 @@
 from __future__ import annotations
 
+import importlib.metadata
 import os
 import subprocess
 import sys
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 from conftest import (
     CODE_LINE,
     INDENTED_CODE_LINE,
     capture_main,
+    expect_exit_two,
     file_diagnostic,
     function_diagnostic,
     make_oversized_function,
     run_check,
+    write_code_lines,
     write_module,
 )
 
 from pymaxlines import MAX_LINES_PER_FUNCTION, MAX_LINES_SRC, MAX_LINES_TEST, main
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from pathlib import Path
-
-
-def _write_code_lines(tmp_path: Path, count: int, name: str = "module.py") -> Path:
-    return write_module(tmp_path, CODE_LINE * count, name)
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +42,7 @@ def _write_code_lines(tmp_path: Path, count: int, name: str = "module.py") -> Pa
 def test_main_when_file_hits_limit_boundary_does_return_expected_exit(
     tmp_path: Path, relative_path: str, code_lines: int, expected_exit: int
 ) -> None:
-    file = _write_code_lines(tmp_path, code_lines, relative_path)
+    file = write_code_lines(tmp_path, code_lines, relative_path)
 
     exit_code = main([str(file)])
 
@@ -61,15 +60,31 @@ def test_main_when_file_hits_limit_boundary_does_return_expected_exit(
 def test_main_when_path_marks_a_test_file_does_apply_the_test_limit(
     tmp_path: Path, relative_path: str
 ) -> None:
-    file = _write_code_lines(tmp_path, MAX_LINES_SRC + 1, relative_path)
+    file = write_code_lines(tmp_path, MAX_LINES_SRC + 1, relative_path)
 
     exit_code = main([str(file)])
 
     assert exit_code == 0
 
 
+def test_main_when_file_outside_cwd_has_tests_ancestor_does_use_source_limit(
+    tmp_path: Path,
+) -> None:
+    # cwd is tmp_path (via _isolate_cwd).  Place the file under a sibling
+    # directory whose path includes a ``tests`` component so the relative path
+    # from cwd starts with ``../`` and contains ``tests``.
+    sibling = tmp_path.parent / "tests" / "project"
+    sibling.mkdir(parents=True, exist_ok=True)
+    file = sibling / "module.py"
+    file.write_text(CODE_LINE * (MAX_LINES_SRC + 1))
+
+    exit_code = main([str(file)])
+
+    assert exit_code == 1
+
+
 def test_main_when_over_limit_does_report_path_count_and_limit(tmp_path: Path) -> None:
-    file = _write_code_lines(tmp_path, MAX_LINES_SRC + 1)
+    file = write_code_lines(tmp_path, MAX_LINES_SRC + 1)
 
     exit_code, lines = run_check(file)
 
@@ -156,48 +171,87 @@ def test_main_when_inline_docstring_on_header_does_count_header_as_code(
 # ---------------------------------------------------------------------------
 
 
-def _missing_file(tmp_path: Path) -> Path:
-    return tmp_path / "absent.py"
+def _error_prefix(path: Path, reason: str) -> str:
+    """Return the expected `path: reason (` prefix of an error diagnostic line."""
+    return f"{path}: {reason} ("
 
 
-def _broken_file(tmp_path: Path) -> Path:
-    return write_module(tmp_path, 'x = "unterminated\n', "broken.py")
+def _assert_error_message(output: str, path: Path, reason: str) -> None:
+    """Assert *output* is a single `path: reason (...)` diagnostic line."""
+    assert output.startswith(_error_prefix(path, reason))
+    assert output.rstrip().endswith(")")
 
 
-@pytest.mark.parametrize(
-    "make_file",
-    [
-        pytest.param(_missing_file, id="missing-file"),
-        pytest.param(_broken_file, id="tokenize-error"),
-    ],
-)
 def test_main_when_file_cannot_be_read_does_report_error_and_return_one(
-    tmp_path: Path, make_file: Callable[[Path], Path]
+    tmp_path: Path,
 ) -> None:
-    file = make_file(tmp_path)
+    file = tmp_path / "absent.py"
 
     exit_code, output = capture_main([str(file)])
 
     assert exit_code == 1
-    assert output.startswith(f"{file}: could not read (")
-    assert output.rstrip().endswith(")")
+    _assert_error_message(output, file, "could not read")
 
 
-def test_main_when_mix_of_unreadable_clean_and_oversized_does_report_only_offenders(
+@pytest.mark.parametrize(
+    ("content", "filename"),
+    [
+        pytest.param("def f(\n", "syntax.py", id="syntax-error"),
+        pytest.param('x = "unterminated\n', "unterminated.py", id="unterminated-string"),
+        pytest.param("x = 1\x00\n", "bad.py", id="null-byte"),
+    ],
+)
+def test_main_when_file_cannot_be_parsed_does_report_error_and_return_one(
+    tmp_path: Path, content: str, filename: str
+) -> None:
+    file = write_module(tmp_path, content, filename)
+
+    exit_code, output = capture_main([str(file)])
+
+    assert exit_code == 1
+    _assert_error_message(output, file, "could not parse")
+
+
+@pytest.mark.parametrize(
+    "exc_class",
+    [
+        pytest.param(ValueError, id="value-error"),
+        pytest.param(RecursionError, id="recursion-error"),
+    ],
+)
+def test_main_when_scan_tokens_raises_internal_error_does_propagate(
+    tmp_path: Path, exc_class: type[Exception]
+) -> None:
+    file = write_module(tmp_path, "x = 1\n")
+    message = "internal bug"
+
+    # scan_tokens is patched at its call site because no real source input
+    # reliably raises from inside it: analyze_file's `except
+    # tokenize.TokenError` is deliberately narrow, and this pins that any
+    # other exception propagates instead of being swallowed.
+    with (
+        patch("pymaxlines._cli.scan_tokens", autospec=True, side_effect=exc_class(message)),
+        pytest.raises(exc_class, match=message),
+    ):
+        main([str(file)])
+
+
+def test_main_when_mix_of_unreadable_unparsable_clean_and_oversized_does_report_only_offenders(
     tmp_path: Path,
 ) -> None:
-    missing = _missing_file(tmp_path)
-    clean = _write_code_lines(tmp_path, 10, "small.py")
-    oversized = _write_code_lines(tmp_path, MAX_LINES_SRC + 1, "big.py")
+    missing = tmp_path / "absent.py"
+    broken = write_module(tmp_path, "def f(\n", "broken.py")
+    clean = write_code_lines(tmp_path, 10, "small.py")
+    oversized = write_code_lines(tmp_path, MAX_LINES_SRC + 1, "big.py")
 
-    exit_code, output = capture_main([str(missing), str(clean), str(oversized)])
+    exit_code, output = capture_main([str(missing), str(broken), str(clean), str(oversized)])
 
     assert exit_code == 1
     output_lines = output.splitlines()
-    assert len(output_lines) == 2
-    assert output_lines[0].startswith(f"{missing}: could not read (")
-    assert output_lines[1] == file_diagnostic(MAX_LINES_SRC + 1, path=str(oversized))
-    assert str(clean) not in output
+    assert len(output_lines) == 3
+    assert output_lines[0].startswith(_error_prefix(missing, "could not read"))
+    assert output_lines[1].startswith(_error_prefix(broken, "could not parse"))
+    assert output_lines[2] == file_diagnostic(MAX_LINES_SRC + 1, path=str(oversized))
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +279,7 @@ def test_main_when_max_lines_flags_given_does_override_defaults(
     argv_prefix: list[str],
     expected_exit: int,
 ) -> None:
-    file = _write_code_lines(tmp_path, code_lines, relative_path)
+    file = write_code_lines(tmp_path, code_lines, relative_path)
 
     exit_code = main([*argv_prefix, str(file)])
 
@@ -246,12 +300,9 @@ _LIMIT_FLAG_PARAMS = [
 
 @pytest.mark.parametrize("flag", _LIMIT_FLAG_PARAMS)
 def test_main_when_negative_line_limit_given_does_exit_two(tmp_path: Path, flag: str) -> None:
-    file = _write_code_lines(tmp_path, 1)
+    file = write_code_lines(tmp_path, 1)
 
-    with pytest.raises(SystemExit) as exc_info:
-        main([flag, "-1", str(file)])
-
-    assert exc_info.value.code == 2
+    expect_exit_two([flag, "-1", str(file)])
 
 
 @pytest.mark.parametrize("flag", _LIMIT_FLAG_PARAMS)
@@ -303,10 +354,6 @@ def test_main_when_nested_and_later_functions_oversized_does_report_in_line_orde
     exit_code, lines = run_check(file)
 
     assert exit_code == 1
-    reported_linenos = [int(line.split(":")[1]) for line in lines]
-    assert reported_linenos == sorted(reported_linenos), (
-        f"Diagnostics not in line order: {reported_linenos}"
-    )
     assert lines == [
         function_diagnostic(1, "outer", outer_code_lines),
         function_diagnostic(inner_start, "inner", inner_code_lines),
@@ -468,7 +515,7 @@ def test_main_when_no_skip_flag_given_does_count_non_code_in_function(
 def test_main_when_argv_omitted_does_read_sys_argv(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    file = _write_code_lines(tmp_path, MAX_LINES_SRC + 1)
+    file = write_code_lines(tmp_path, MAX_LINES_SRC + 1)
     monkeypatch.setattr(sys, "argv", ["pymaxlines", str(file)])
 
     exit_code = main()
@@ -477,7 +524,7 @@ def test_main_when_argv_omitted_does_read_sys_argv(
 
 
 def test_module_entry_when_file_over_limit_does_exit_one(tmp_path: Path) -> None:
-    file = _write_code_lines(tmp_path, MAX_LINES_SRC + 1)
+    file = write_code_lines(tmp_path, MAX_LINES_SRC + 1)
 
     result = subprocess.run(  # noqa: S603 — fixed interpreter and args, no shell
         [sys.executable, "-m", "pymaxlines", str(file)],
@@ -488,6 +535,92 @@ def test_module_entry_when_file_over_limit_does_exit_one(tmp_path: Path) -> None
 
     assert result.returncode == 1
     assert result.stdout.rstrip() == file_diagnostic(MAX_LINES_SRC + 1, path=str(file))
+
+
+# ---------------------------------------------------------------------------
+# entry points — version flag
+# ---------------------------------------------------------------------------
+
+_EXPECTED_VERSION_OUTPUT = f"pymaxlines {importlib.metadata.version('pymaxlines')}"
+
+
+@pytest.mark.parametrize(
+    ("flag", "with_oversized_file"),
+    [
+        pytest.param("--version", False, id="long-flag"),
+        pytest.param("-v", False, id="short-flag"),
+        pytest.param("--version", True, id="with-oversized-file"),
+    ],
+)
+def test_main_when_version_flag_given_does_print_version_and_exit_zero(
+    flag: str, with_oversized_file: bool, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = [flag]
+    if with_oversized_file:
+        argv.append(str(write_code_lines(tmp_path, MAX_LINES_SRC + 1)))
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(argv)
+
+    assert exc_info.value.code == 0
+    assert capsys.readouterr().out.strip() == _EXPECTED_VERSION_OUTPUT
+
+
+# ---------------------------------------------------------------------------
+# entry points — --help and --version bypass config errors
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "config_content",
+    [
+        pytest.param("[invalid toml content\n", id="invalid-toml"),
+        pytest.param("[tool.pymaxlines]\nbogus-key = 42\n", id="unknown-key"),
+    ],
+)
+@pytest.mark.parametrize(
+    "flag",
+    [
+        pytest.param("--help", id="help"),
+        pytest.param("--hel", id="help-abbreviated"),
+        pytest.param("--version", id="version"),
+        pytest.param("--vers", id="version-abbreviated"),
+    ],
+)
+def test_main_when_cwd_config_is_broken_and_help_or_version_given_does_exit_zero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flag: str,
+    config_content: str,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(config_content)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main([flag])
+
+    assert exc_info.value.code == 0
+
+
+# ---------------------------------------------------------------------------
+# entry points — --no-report-unused-disable-directives
+# ---------------------------------------------------------------------------
+
+
+def test_main_when_no_report_unused_flag_given_does_suppress_unused_warnings(
+    tmp_path: Path,
+) -> None:
+    content = "# pymaxlines: disable=max-lines-per-function\ndef small():\n    x = 1\n"
+    file = write_module(tmp_path, content)
+
+    exit_code, lines = run_check(
+        file,
+        "--report-unused-disable-directives",
+        "--no-report-unused-disable-directives",
+    )
+
+    assert exit_code == 0
+    assert lines == []
 
 
 # ---------------------------------------------------------------------------
@@ -502,27 +635,32 @@ def test_module_entry_when_file_over_limit_does_exit_one(tmp_path: Path) -> None
         pytest.param([sys.executable, "-m", "pymaxlines"], id="python-m"),
     ],
 )
+@pytest.mark.parametrize(
+    "extra_env",
+    [
+        pytest.param({"PYTHONUNBUFFERED": "1"}, id="unbuffered"),
+        pytest.param({}, id="block-buffered"),
+    ],
+)
 def test_main_when_stdout_closed_mid_run_does_exit_one_without_traceback(
-    tmp_path: Path, cmd_prefix: list[str]
+    tmp_path: Path, cmd_prefix: list[str], extra_env: dict[str, str]
 ) -> None:
-    file_a = _write_code_lines(tmp_path, MAX_LINES_SRC + 1, "a.py")
-    file_b = _write_code_lines(tmp_path, MAX_LINES_SRC + 1, "b.py")
-    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    # Enough oversized files that the output exceeds the pipe buffer
+    # (64 KB on Linux, 16 KB on macOS) even when block-buffered.
+    files = [str(write_code_lines(tmp_path, MAX_LINES_SRC + 1, f"f{i:03d}.py")) for i in range(200)]
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"} | extra_env
 
-    proc = subprocess.Popen(  # noqa: S603 — fixed commands, no shell
-        [*cmd_prefix, str(file_a), str(file_b)],
+    with subprocess.Popen(  # noqa: S603 — fixed commands, no shell
+        [*cmd_prefix, *files],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         env=env,
-    )
-    assert proc.stdout is not None
-    proc.stdout.readline()
-    proc.stdout.close()
-    proc.wait(timeout=10)
-    stderr = proc.stderr.read() if proc.stderr else ""
-    if proc.stderr:
-        proc.stderr.close()
+    ) as proc:
+        assert proc.stdout is not None
+        proc.stdout.readline()
+        proc.stdout.close()
+        _, stderr = proc.communicate(timeout=30)
 
     assert proc.returncode == 1
     assert "Traceback" not in stderr
@@ -533,7 +671,7 @@ def test_main_when_stdout_closed_mid_run_does_exit_one_without_traceback(
 def test_main_when_stdout_write_raises_broken_pipe_does_return_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    file = _write_code_lines(tmp_path, MAX_LINES_SRC + 1)
+    file = write_code_lines(tmp_path, MAX_LINES_SRC + 1)
 
     def _broken_write(_text: str) -> int:
         msg = "Broken pipe"
@@ -542,5 +680,29 @@ def test_main_when_stdout_write_raises_broken_pipe_does_return_one(
     monkeypatch.setattr(sys.stdout, "write", _broken_write)
 
     exit_code = main([str(file)])
+
+    assert exit_code == 1
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root bypasses directory permissions")
+def test_main_when_stdout_pipe_breaks_during_walk_error_does_return_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    forbidden = tmp_path / "pkg" / "secret"
+    forbidden.mkdir(parents=True)
+    write_code_lines(tmp_path, 1, "pkg/ok.py")
+    forbidden.chmod(0o000)
+    monkeypatch.chdir(tmp_path)
+
+    def _broken_write(_text: str) -> int:
+        msg = "Broken pipe"
+        raise BrokenPipeError(msg)
+
+    monkeypatch.setattr(sys.stdout, "write", _broken_write)
+
+    try:
+        exit_code = main(["pkg"])
+    finally:
+        forbidden.chmod(0o755)
 
     assert exit_code == 1
