@@ -5,7 +5,8 @@
 [![CI](https://github.com/jeffzi/pymaxlines/actions/workflows/pytest.yml/badge.svg)](https://github.com/jeffzi/pymaxlines/actions/workflows/pytest.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jeffzi/pymaxlines/blob/main/LICENSE)
 
-A pre-commit hook that fails when a Python file or function has too many lines of code.
+A Python linter that fails when a file or function has too many code lines. Run it standalone or as
+a pre-commit hook.
 
 Requires Python 3.12+.
 
@@ -13,6 +14,8 @@ Requires Python 3.12+.
 - [Quick example](#quick-example)
 - [Installation](#installation)
 - [Usage](#usage)
+  - [Source and test files](#source-and-test-files)
+- [Configuration](#configuration)
 - [Suppressing a finding](#suppressing-a-finding)
 - [What counts as a code line](#what-counts-as-a-code-line)
 - [Contributing](#contributing)
@@ -49,6 +52,22 @@ src/app/service.py:88: function 'handle_request' has 73 code lines (max 60)
 
 ## Installation
 
+Run directly with `uvx` (no install needed):
+
+```bash
+uvx pymaxlines
+```
+
+Or install into a project:
+
+```bash
+uv add --dev pymaxlines
+```
+
+When installed, `python -m pymaxlines` is equivalent to the `pymaxlines` command.
+
+### Pre-commit hook
+
 Add the hook to `.pre-commit-config.yaml` and run `pre-commit install` or
 [`prek install`][prek]:
 
@@ -56,60 +75,132 @@ Add the hook to `.pre-commit-config.yaml` and run `pre-commit install` or
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/jeffzi/pymaxlines
-    rev: v0.3.0
+    rev: v0.5.0
     hooks:
       - id: check-max-lines
 ```
 
-[pre-commit]: https://pre-commit.com
+The hook receives explicit file paths from the pre-commit framework and checks only those files. The
+shipped hook passes `--force-exclude`, so `exclude` patterns from `[tool.pymaxlines]` are honored
+automatically. To check every file pre-commit passes and ignore `exclude` patterns, add
+`args: [--no-force-exclude]`. Pre-commit's own `exclude:` key remains available for coarser
+filtering. Limits and `skip-*` settings from `[tool.pymaxlines]` in the repo root still apply.
+
 [prek]: https://github.com/j178/prek
-
-To run it outside [pre-commit][pre-commit]:
-
-```bash
-uvx pymaxlines file1.py file2.py
-```
-
-When the package is installed in an environment, `python -m pymaxlines` is equivalent to the
-`pymaxlines` command and lets you pick the interpreter explicitly.
 
 ## Usage
 
-The hook runs on `.py` files. A file is a **test file** when the path passed on the command line
-contains a `tests/` component, or the filename matches `test_*.py` or `*_test.py`. Everything else
-is a **source file**. The flag table below uses these terms in its "Applies to" column.
+### File discovery
 
-Defaults, all overridable with flags:
+With no arguments, `pymaxlines` checks every `*.py` file under the current directory recursively:
 
-| Flag                                 | Applies to | Default | Meaning                                                                      |
-| ------------------------------------ | ---------- | ------- | ---------------------------------------------------------------------------- |
-| `--max-lines`                        | source     | 400     | code lines per file                                                          |
-| `--max-lines-test`                   | test       | 800     | code lines per file                                                          |
-| `--max-lines-per-function`           | source     | 60      | code lines per function, `0` disables                                        |
-| `--max-lines-per-function-test`      | test       | 0       | code lines per function, `0` disables                                        |
-| `--skip-blank-lines`                 | all        | True    | exclude blank lines from counts                                              |
-| `--skip-comments`                    | all        | True    | exclude comment-only lines                                                   |
-| `--skip-docstrings`                  | all        | True    | exclude standalone docstrings                                                |
-| `--report-unused-disable-directives` | all        | False   | fail on directives that suppress nothing _(unreleased — ships after v0.3.0)_ |
-
-`--max-lines` and `--max-lines-test` have no disable value — `0` fails any file containing code.
-All four limit flags reject negative values.
-
-Pass flags through the hook's `args`:
-
-```yaml
-- id: check-max-lines
-  args: [--max-lines, "300", --max-lines-per-function, "40"]
+```console
+$ pymaxlines
+pkg/big.py: 412 code lines (max 400)
 ```
 
-Each `--skip-*` flag has a `--no-skip-*` counterpart. To count comment-only and blank lines:
+Pass one or more directories to scope the check:
 
-```yaml
-- id: check-max-lines
-  args: [--no-skip-comments, --no-skip-blank-lines]
+```bash
+pymaxlines src/ tests/
 ```
 
-### Suppressing a finding
+Discovery skips these directories at any depth: `.git`, `.venv*`, `node_modules`, `__pycache__`,
+`.tox`, `.nox`, `.eggs`. The `.venv*` entry is a glob, so `.venv`, `.venv-3.12`, and `.venv312` are
+all pruned. Symlinked directories are also skipped. A path reached more than once (for example a
+file also covered by a directory argument) is reported once, in first-seen order. Within each
+directory, files are visited in sorted order for deterministic output.
+
+Files named explicitly on the command line are checked as given, even if they match a skip directory,
+an `exclude` glob, or lack a `.py` suffix. Pass `--force-exclude` to apply `exclude` globs to
+explicit paths too. Files and directories can be mixed in one invocation.
+
+### Exclude globs
+
+Use `--exclude` to skip files or directories by glob pattern:
+
+```bash
+pymaxlines --exclude "migrations" --exclude "generated/*.py"
+```
+
+A glob matches the discovered path (`src/generated/parser.py`) or the final path component
+(`migrations`). A matched directory is not descended into. `--exclude` on the command line replaces
+the `exclude` list from the config file.
+
+### Source and test files
+
+A file is a **test file** when, relative to the current directory, the path has a `tests` component,
+or the filename starts with `test_` or ends with `_test.py`. A file outside the current directory is
+classified by its filename only. Everything else is a **source file**.
+
+### Flags
+
+| Flag                                 | Applies to | Default | Meaning                                           |
+| ------------------------------------ | ---------- | ------- | ------------------------------------------------- |
+| `--max-lines`                        | source     | 400     | code lines per file                               |
+| `--max-lines-test`                   | test       | 800     | code lines per file                               |
+| `--max-lines-per-function`           | source     | 60      | code lines per function; `0` disables             |
+| `--max-lines-per-function-test`      | test       | 0       | code lines per function; `0` disables             |
+| `--skip-blank-lines`                 | all        | True    | exclude blank lines from counts                   |
+| `--skip-comments`                    | all        | True    | exclude comment-only lines                        |
+| `--skip-docstrings`                  | all        | True    | exclude standalone docstrings                     |
+| `--report-unused-disable-directives` | all        | False   | fail on directives that suppress nothing          |
+| `--force-exclude`                    | explicit   | False   | apply exclude globs to explicitly passed paths    |
+| `--exclude GLOB`                     | discovery  | —       | skip matching files/directories (repeatable)      |
+| `--config PATH`                      | —          | —       | read config from PATH instead of `pyproject.toml` |
+| `-v`, `--version`                    | —          | —       | print version and exit                            |
+
+Each `--skip-*` flag has a `--no-skip-*` counterpart, and `--report-unused-disable-directives` has
+`--no-report-unused-disable-directives`. `--max-lines` and `--max-lines-test` have no disable
+value — `0` fails any file containing code. All four limit flags reject negative values.
+
+### Exit codes
+
+| Code | Meaning                                                                                     |
+| ---- | ------------------------------------------------------------------------------------------- |
+| 0    | No findings. When discovery matches no `.py` files, `pymaxlines` prints a warning to stderr |
+|      | and still exits 0.                                                                          |
+| 1    | One or more findings, or a file that could not be read or parsed.                           |
+| 2    | Invalid CLI usage, a negative limit, or an invalid/unknown config key.                      |
+
+## Configuration
+
+`pymaxlines` reads defaults from `[tool.pymaxlines]` in the working directory's `pyproject.toml`:
+
+```toml
+[tool.pymaxlines]
+max-lines = 300
+max-lines-per-function = 40
+exclude = ["migrations", "generated/*.py"]
+```
+
+### Supported keys
+
+| Key                                | Type            | Default |
+| ---------------------------------- | --------------- | ------- |
+| `max-lines`                        | integer         | 400     |
+| `max-lines-test`                   | integer         | 800     |
+| `max-lines-per-function`           | integer         | 60      |
+| `max-lines-per-function-test`      | integer         | 0       |
+| `skip-blank-lines`                 | boolean         | true    |
+| `skip-comments`                    | boolean         | true    |
+| `skip-docstrings`                  | boolean         | true    |
+| `report-unused-disable-directives` | boolean         | false   |
+| `force-exclude`                    | boolean         | false   |
+| `exclude`                          | list of strings | `[]`    |
+
+### Precedence
+
+A flag on the command line overrides the config file. A key absent from the config file keeps its
+built-in default. Order: built-in default < config file < CLI flag.
+
+### Error handling
+
+An unknown key, a wrong-typed value, or a negative limit in the config file exits 2 with an error
+naming the key and the file. `--config PATH` reads from a specific file; a missing or invalid TOML
+path exits 2 with an error naming the path.
+
+## Suppressing a finding
 
 Add a `# pymaxlines: disable` comment to exempt a file or function from the checks instead of
 raising the global limit.
@@ -141,14 +232,17 @@ At file scope it suppresses both the file check and every function check; on a `
 that function.
 
 Separate several rules with commas: `# pymaxlines: disable=max-lines,max-lines-per-function`.
+Only one directive is allowed per line — a second `pymaxlines:` segment is an error.
 
 A directive can share its `#` line with other comments:
 `def big_handler(...):  # noqa: C901  # pymaxlines: disable`.
 
-Any `#` segment whose first word is `pymaxlines` (any case) is a directive attempt and must use the
-canonical `pymaxlines: <action>` form. `pymaxlines` rejects three near-misses and fails the run: a
-wrong-case prefix (`PYMAXLINES:`), a missing colon (`pymaxlines disable`), and a non-colon separator
-(`pymaxlines-disable`).
+Any `#` segment whose first word is `pymaxlines` (any case, not followed by a word character) is a
+directive attempt and must use the canonical `pymaxlines: <action>` form. A segment that matches but
+does not parse fails the run — a wrong-case prefix (`PYMAXLINES:`), a missing colon
+(`pymaxlines disable`), and a non-colon separator (`pymaxlines-disable`) are common examples, but
+any non-canonical form triggers the same error. A word character immediately after `pymaxlines`
+suppresses the check, so `pymaxlines_disable` is not treated as an attempt.
 
 Each rule is only valid at certain scopes:
 
@@ -170,7 +264,7 @@ Pass `--report-unused-disable-directives` to fail the run on directives that sup
 `disable` as unused only when neither check would have fired, and never reports a directive that
 already failed validation.
 
-### What counts as a code line
+## What counts as a code line
 
 By default (all `--skip-*` flags on):
 
@@ -188,7 +282,8 @@ By default (all `--skip-*` flags on):
 Turning a `--skip-*` flag off (e.g. `--no-skip-blank-lines`) makes that category count toward both
 file and function totals.
 
-`pymaxlines` reports unreadable files (missing, undecodable, or syntax errors) and fails the run.
+`pymaxlines` reports unreadable files and directories it cannot list (missing, permission denied,
+undecodable, or syntax errors) and fails the run.
 
 ## Contributing
 

@@ -1,19 +1,20 @@
 [project]
 name = "pymaxlines"
-version = "0.4.0"
-description = "Fail when a Python file or function exceeds a code-line limit"
+version = "0.5.0"
+description = "Linter that caps code lines per file and per function"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "jeffzi" }]
 requires-python = ">=3.12"
 dependencies = []
-keywords = ["pre-commit", "lint", "max-lines", "code-size"]
+keywords = ["code-quality", "code-size", "linter", "max-lines", "pre-commit", "static-analysis"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Environment :: Console",
   "Intended Audience :: Developers",
-  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
@@ -115,10 +116,10 @@ convention = "google"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov --cov-report=term-missing"
+addopts = "--cov --cov-report=term-missing -m 'not e2e'"
 filterwarnings = ["error"]
 xfail_strict = true
-markers = ["e2e: end-to-end tests that clone external repositories (need --run-e2e to run)"]
+markers = ["e2e: end-to-end tests that clone external repositories"]
 
 [tool.coverage.run]
 source = ["src"]
