@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 from pymaxlines._config import BOOL_SPECS, LIMIT_SPECS, dest_name, load_config
 from pymaxlines._directives import (
+    MAX_LINES_PER_FUNCTION_RULE,
+    MAX_LINES_RULE,
     RULES_DISABLING_FILE,
     RULES_DISABLING_FUNCTIONS,
     DirectiveResult,
@@ -32,7 +34,7 @@ from pymaxlines._lines import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
 DESCRIPTION = "Fail when a Python file or function exceeds a code-line limit."
 PACKAGE_NAME = "pymaxlines"
@@ -55,12 +57,16 @@ class Config:
     exclude: tuple[str, ...] = ()
 
 
-UNUSED_MSG = "unused pymaxlines-disable directive (no findings were reported)"
+UNUSED_DISABLE_DIRECTIVE_RULE = "unused-disable-directive"
+UNUSED_MSG = (
+    "unused pymaxlines-disable directive (no findings were reported) "
+    f"[{UNUSED_DISABLE_DIRECTIVE_RULE}]"
+)
 
 
 def _file_diagnostic(path: Path, message: str) -> str:
-    """Format a file-level diagnostic: ``path: message``."""
-    return f"{path}: {message}"
+    """Format a file-level diagnostic: ``path:1: message``."""
+    return diagnostic(path, 1, message)
 
 
 def is_test_file(path: Path) -> bool:
@@ -85,7 +91,7 @@ def is_test_file(path: Path) -> bool:
 
 
 def report(message: str) -> int:
-    """Write *message* to stdout and return the exit-code contribution (always 1)."""
+    """Write *message* to stdout and return 1, the diagnostic count it contributes."""
     sys.stdout.write(f"{message}\n")
     return 1
 
@@ -99,9 +105,9 @@ def report_unused(
 ) -> int:
     """Report every valid directive that suppressed nothing.
 
-    Returns the accumulated exit code.
+    Returns the number of diagnostics reported.
     """
-    exit_code = 0
+    count = 0
     for directive in directives.valid_directives:
         if directive.def_line is not None:
             unused = directive.def_line not in would_oversized
@@ -112,8 +118,8 @@ def report_unused(
             )
             unused = not (suppresses_file or suppresses_func)
         if unused:
-            exit_code |= report(diagnostic(path, directive.lineno, UNUSED_MSG))
-    return exit_code
+            count += report(diagnostic(path, directive.lineno, UNUSED_MSG))
+    return count
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +132,7 @@ class FileAnalysis:
     oversized: tuple[OversizedFunction, ...]
     file_limit: int
     function_limit: int
+    header_ranges: Mapping[int, int]
 
 
 def _analysis_error(path: Path, verb: str, exc: Exception) -> str:
@@ -173,6 +180,7 @@ def analyze_file(path: Path, config: Config) -> FileAnalysis | str:
             code_lines,
             function_limit,
             exempt_lines=directives.exempt_def_lines,
+            header_ranges=scan.header_ranges,
         )
     return FileAnalysis(
         tree=tree,
@@ -181,11 +189,12 @@ def analyze_file(path: Path, config: Config) -> FileAnalysis | str:
         oversized=tuple(oversized),
         file_limit=file_limit,
         function_limit=function_limit,
+        header_ranges=scan.header_ranges,
     )
 
 
 def check_file(path: Path, config: Config) -> int:
-    """Run every configured check on *path* and return a non-zero exit code on violation.
+    """Run every configured check on *path* and return the number of diagnostics reported.
 
     Unused-directive detection re-runs ``oversized_functions`` *without*
     ``exempt_lines`` so it can compare what would have been oversized against
@@ -195,23 +204,25 @@ def check_file(path: Path, config: Config) -> int:
     if isinstance(analysis, str):
         return report(analysis)
 
-    exit_code = 0
+    count = 0
     for error in analysis.directives.errors:
-        exit_code |= report(error)
+        count += report(error)
     file_exceeds = len(analysis.code_lines) > analysis.file_limit
     if not analysis.directives.skip_file_check and file_exceeds:
-        exit_code |= report(
+        count += report(
             _file_diagnostic(
-                path, f"{len(analysis.code_lines)} code lines (max {analysis.file_limit})"
+                path,
+                "Too many lines in module"
+                f" ({len(analysis.code_lines)} > {analysis.file_limit}) [{MAX_LINES_RULE}]",
             )
         )
     for func in analysis.oversized:
-        exit_code |= report(
+        count += report(
             diagnostic(
                 path,
                 func.lineno,
-                f"function '{func.name}' has {func.count} code lines"
-                f" (max {analysis.function_limit})",
+                f"Too many lines in function '{func.name}'"
+                f" ({func.count} > {analysis.function_limit}) [{MAX_LINES_PER_FUNCTION_RULE}]",
             )
         )
     if config.report_unused_disable_directives and analysis.directives.valid_directives:
@@ -220,16 +231,19 @@ def check_file(path: Path, config: Config) -> int:
             would_oversized = {
                 f.lineno
                 for f in oversized_functions(
-                    analysis.tree, analysis.code_lines, analysis.function_limit
+                    analysis.tree,
+                    analysis.code_lines,
+                    analysis.function_limit,
+                    header_ranges=analysis.header_ranges,
                 )
             }
-        exit_code |= report_unused(
+        count += report_unused(
             analysis.directives,
             file_exceeds=file_exceeds,
             would_oversized=would_oversized,
             path=path,
         )
-    return exit_code
+    return count
 
 
 def _add_config_flag(parser: argparse.ArgumentParser) -> None:
@@ -332,6 +346,15 @@ def _silence_broken_stdout() -> None:
             os.close(devnull)
 
 
+def _finish(total: int) -> int:
+    """Write the "Found N errors." summary, flush stdout, and return the exit code."""
+    if total > 0:
+        noun = "error" if total == 1 else "errors"
+        sys.stdout.write(f"Found {total} {noun}.\n")
+    sys.stdout.flush()
+    return 1 if total > 0 else 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Check each file; return 1 if any is unreadable or exceeds a limit.
 
@@ -342,16 +365,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     files, walk_errors = discover_files(
         config.files, config.exclude, force_exclude=config.force_exclude
     )
-    exit_code = 0
+    total = 0
     try:
         for exc in walk_errors:
-            exit_code |= report(_analysis_error(Path(exc.filename), "read", exc))
+            total += report(_analysis_error(Path(exc.filename), "read", exc))
         if not files:
             sys.stderr.write("warning: no .py files found\n")
-            return exit_code
+            return _finish(total)
         for path in files:
-            exit_code |= check_file(path, config)
-        sys.stdout.flush()
+            total += check_file(path, config)
+        return _finish(total)
     except OSError as exc:
         # BrokenPipeError (EPIPE) on Unix; EINVAL on Windows when the reader
         # closes the pipe.  Re-raise anything unrelated.
@@ -359,4 +382,3 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise
         _silence_broken_stdout()
         return 1
-    return exit_code

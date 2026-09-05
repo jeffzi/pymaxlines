@@ -23,9 +23,14 @@ class RuleEffect:
     disables_function_check: bool
 
 
+MAX_LINES_RULE = "max-lines"
+MAX_LINES_PER_FUNCTION_RULE = "max-lines-per-function"
+
 RULE_REGISTRY: dict[str, RuleEffect] = {
-    "max-lines": RuleEffect(disables_file_check=True, disables_function_check=False),
-    "max-lines-per-function": RuleEffect(disables_file_check=False, disables_function_check=True),
+    MAX_LINES_RULE: RuleEffect(disables_file_check=True, disables_function_check=False),
+    MAX_LINES_PER_FUNCTION_RULE: RuleEffect(
+        disables_file_check=False, disables_function_check=True
+    ),
 }
 
 KNOWN_RULES = frozenset(RULE_REGISTRY)

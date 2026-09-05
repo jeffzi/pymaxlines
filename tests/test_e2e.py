@@ -95,4 +95,4 @@ def test_main_when_run_against_e2e_repo_does_detect_oversized_file(
 
     assert exit_code == 1
     out = capsys.readouterr().out
-    assert any("code lines (max" in line for line in out.splitlines())
+    assert any("Too many lines in module" in line for line in out.splitlines())

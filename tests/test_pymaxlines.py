@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib.metadata
 import os
 import subprocess
@@ -12,6 +13,7 @@ from conftest import (
     CODE_LINE,
     INDENTED_CODE_LINE,
     capture_main,
+    diagnostic_lines,
     expect_exit_two,
     file_diagnostic,
     function_diagnostic,
@@ -22,6 +24,12 @@ from conftest import (
 )
 
 from pymaxlines import MAX_LINES_PER_FUNCTION, MAX_LINES_SRC, MAX_LINES_TEST, main
+from pymaxlines._lines import (
+    OversizedFunction,
+    code_line_numbers,
+    oversized_functions,
+    scan_tokens,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -172,14 +180,16 @@ def test_main_when_inline_docstring_on_header_does_count_header_as_code(
 
 
 def _error_prefix(path: Path, reason: str) -> str:
-    """Return the expected `path: reason (` prefix of an error diagnostic line."""
-    return f"{path}: {reason} ("
+    """Return the expected `path:1: reason (` prefix of an error diagnostic line."""
+    return f"{path}:1: {reason} ("
 
 
 def _assert_error_message(output: str, path: Path, reason: str) -> None:
-    """Assert *output* is a single `path: reason (...)` diagnostic line."""
-    assert output.startswith(_error_prefix(path, reason))
-    assert output.rstrip().endswith(")")
+    """Assert *output* contains a single `path:1: reason (...)` diagnostic line."""
+    diag_lines = diagnostic_lines(output)
+    assert len(diag_lines) == 1
+    assert diag_lines[0].startswith(_error_prefix(path, reason))
+    assert diag_lines[0].endswith(")")
 
 
 def test_main_when_file_cannot_be_read_does_report_error_and_return_one(
@@ -247,11 +257,13 @@ def test_main_when_mix_of_unreadable_unparsable_clean_and_oversized_does_report_
     exit_code, output = capture_main([str(missing), str(broken), str(clean), str(oversized)])
 
     assert exit_code == 1
-    output_lines = output.splitlines()
-    assert len(output_lines) == 3
-    assert output_lines[0].startswith(_error_prefix(missing, "could not read"))
-    assert output_lines[1].startswith(_error_prefix(broken, "could not parse"))
-    assert output_lines[2] == file_diagnostic(MAX_LINES_SRC + 1, path=str(oversized))
+    all_lines = output.splitlines()
+    diag_lines = diagnostic_lines(output)
+    assert len(diag_lines) == 3
+    assert diag_lines[0].startswith(_error_prefix(missing, "could not read"))
+    assert diag_lines[1].startswith(_error_prefix(broken, "could not parse"))
+    assert diag_lines[2] == file_diagnostic(MAX_LINES_SRC + 1, path=str(oversized))
+    assert all_lines[-1] == "Found 3 errors."
 
 
 # ---------------------------------------------------------------------------
@@ -346,10 +358,11 @@ def test_main_when_nested_and_later_functions_oversized_does_report_in_line_orde
     )
     file = write_module(tmp_path, source)
     inner_start = 2
-    outer_code_lines = 2 + body + 1  # def outer + def inner + inner body + trailing line
-    inner_code_lines = body + 1  # def inner + body
-    later_start = outer_code_lines + 1
-    later_code_lines = body + 1  # def later + body
+    outer_span = 1 + 1 + body + 1  # total lines in outer: def outer + def inner + body + trailing
+    outer_code_lines = outer_span - 1  # def outer header excluded
+    inner_code_lines = body  # body only (def inner header excluded)
+    later_start = outer_span + 1
+    later_code_lines = body  # body only (def later header excluded)
 
     exit_code, lines = run_check(file)
 
@@ -385,16 +398,21 @@ def test_main_when_function_has_non_code_content_does_not_count_it(
     assert exit_code == 0
 
 
-def test_main_when_multiline_def_has_docstring_on_closing_paren_does_count_that_line(
-    tmp_path: Path,
-) -> None:
-    content = 'def f(\n    x,\n): "doc"\n'
-    file = write_module(tmp_path, content)
+def test_main_when_multiline_def_has_docstring_on_closing_paren_does_count_that_line() -> None:
+    # ): "doc" closes the signature AND carries body code — the line must be
+    # counted as body. A CLI-level assertion can't distinguish that count
+    # (1) from the wrongly-excluded count (0) here: limit=0 disables the
+    # function check entirely, and any positive limit accepts count=1 too.
+    # Checking oversized_functions() directly with limit=0 makes
+    # `count > limit` distinguish the two cases.
+    source = 'def f(\n    x,\n): "doc"\n'
+    tree = ast.parse(source)
+    scan = scan_tokens(source)
+    code_lines = code_line_numbers(source, tree, scan, skip_blank_lines=True, skip_docstrings=True)
 
-    exit_code, lines = run_check(file, "--max-lines-per-function", "2")
+    result = oversized_functions(tree, code_lines, limit=0, header_ranges=scan.header_ranges)
 
-    assert exit_code == 1
-    assert lines == [function_diagnostic(1, "f", 3, limit=2)]
+    assert result == [OversizedFunction("f", 1, 1)]
 
 
 @pytest.mark.parametrize(
@@ -419,6 +437,99 @@ def test_main_when_function_limit_flags_vary_does_gate_the_check(
     exit_code = main([*argv_prefix, str(file)])
 
     assert exit_code == expected_exit
+
+
+# ---------------------------------------------------------------------------
+# main — header lines excluded from function count
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("header", "body_lines", "expected_exit", "expected_lines"),
+    [
+        pytest.param(
+            "def big():\n",
+            MAX_LINES_PER_FUNCTION,
+            0,
+            [],
+            id="simple-header-at-limit",
+        ),
+        pytest.param(
+            "def big(\n    a,\n):\n",
+            MAX_LINES_PER_FUNCTION,
+            0,
+            [],
+            id="multiline-sig-at-limit",
+        ),
+        pytest.param(
+            "def big(\n    a,\n):\n",
+            MAX_LINES_PER_FUNCTION + 1,
+            1,
+            [function_diagnostic(1, "big", MAX_LINES_PER_FUNCTION + 1)],
+            id="multiline-sig-over-limit",
+        ),
+        pytest.param(
+            "async def big(\n    a,\n):\n",
+            MAX_LINES_PER_FUNCTION + 1,
+            1,
+            [function_diagnostic(1, "big", MAX_LINES_PER_FUNCTION + 1)],
+            id="async-multiline-sig",
+        ),
+        pytest.param(
+            "def big(\n    a,\n) -> dict[str, int]:\n",
+            MAX_LINES_PER_FUNCTION + 1,
+            1,
+            [function_diagnostic(1, "big", MAX_LINES_PER_FUNCTION + 1)],
+            id="return-annotation-after-paren",
+        ),
+        pytest.param(
+            "def big(x=lambda: 1) -> dict[str, int]:\n",
+            MAX_LINES_PER_FUNCTION + 1,
+            1,
+            [function_diagnostic(1, "big", MAX_LINES_PER_FUNCTION + 1)],
+            id="default-with-lambda-and-annotation",
+        ),
+    ],
+)
+def test_main_when_multiline_signature_does_exclude_header_from_count(
+    tmp_path: Path,
+    header: str,
+    body_lines: int,
+    expected_exit: int,
+    expected_lines: list[str],
+) -> None:
+    source = header + INDENTED_CODE_LINE * body_lines
+    file = write_module(tmp_path, source)
+
+    exit_code, lines = run_check(file)
+
+    assert exit_code == expected_exit
+    assert lines == expected_lines
+
+
+def test_main_when_no_skip_comments_does_count_comment_after_header_but_not_header(
+    tmp_path: Path,
+) -> None:
+    body = MAX_LINES_PER_FUNCTION + 1
+    source = "def big():\n    # comment between header and body\n" + INDENTED_CODE_LINE * body
+    file = write_module(tmp_path, source)
+
+    exit_code, lines = run_check(file, "--no-skip-comments")
+
+    assert exit_code == 1
+    assert lines == [function_diagnostic(1, "big", body + 1)]
+
+
+def test_main_when_file_over_limit_does_count_header_lines_in_file_total(
+    tmp_path: Path,
+) -> None:
+    source = "def f():\n" + INDENTED_CODE_LINE * MAX_LINES_SRC
+    file = write_module(tmp_path, source)
+
+    exit_code, lines = run_check(file, "--max-lines-per-function", "0")
+
+    assert exit_code == 1
+    assert lines == [file_diagnostic(MAX_LINES_SRC + 1)]
 
 
 # ---------------------------------------------------------------------------
@@ -534,7 +645,10 @@ def test_module_entry_when_file_over_limit_does_exit_one(tmp_path: Path) -> None
     )
 
     assert result.returncode == 1
-    assert result.stdout.rstrip() == file_diagnostic(MAX_LINES_SRC + 1, path=str(file))
+    stdout_lines = result.stdout.rstrip().splitlines()
+    assert len(stdout_lines) == 2
+    assert stdout_lines[0] == file_diagnostic(MAX_LINES_SRC + 1, path=str(file))
+    assert stdout_lines[1] == "Found 1 error."
 
 
 # ---------------------------------------------------------------------------
@@ -712,3 +826,39 @@ def test_main_when_stdout_pipe_breaks_during_walk_error_does_return_one(
         forbidden.chmod(0o755)
 
     assert exit_code == 1
+
+
+# ---------------------------------------------------------------------------
+# summary line
+# ---------------------------------------------------------------------------
+
+
+def test_main_when_no_diagnostics_does_not_print_summary(tmp_path: Path) -> None:
+    file = write_module(tmp_path, CODE_LINE * 10)
+
+    exit_code, output = capture_main([str(file)])
+
+    assert exit_code == 0
+    assert output == ""
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_summary"),
+    [
+        pytest.param(CODE_LINE * (MAX_LINES_SRC + 1), "Found 1 error.", id="file-over-limit"),
+        pytest.param(
+            make_oversized_function()[0] + "\n" + CODE_LINE * MAX_LINES_SRC,
+            "Found 2 errors.",
+            id="file-and-function-over-limit",
+        ),
+    ],
+)
+def test_main_when_diagnostics_emitted_does_print_matching_summary_line(
+    tmp_path: Path, content: str, expected_summary: str
+) -> None:
+    file = write_module(tmp_path, content)
+
+    exit_code, output = capture_main([str(file)])
+
+    assert exit_code == 1
+    assert output.strip().splitlines()[-1] == expected_summary
