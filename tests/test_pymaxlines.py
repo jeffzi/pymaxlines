@@ -684,7 +684,10 @@ def test_main_when_stdout_write_raises_broken_pipe_does_return_one(
     assert exit_code == 1
 
 
-@pytest.mark.skipif(os.getuid() == 0, reason="root bypasses directory permissions")
+@pytest.mark.skipif(
+    sys.platform == "win32" or getattr(os, "getuid", lambda: -1)() == 0,
+    reason="Windows ignores POSIX permission bits; root bypasses them",
+)
 def test_main_when_stdout_pipe_breaks_during_walk_error_does_return_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
