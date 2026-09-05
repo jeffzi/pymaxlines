@@ -32,7 +32,9 @@ _MALFORMED_MSG = (
     " expected '# pymaxlines: disable' or '# pymaxlines: disable=<rule>[,<rule>]'"
 )
 _WRONG_SCOPE_MSG = "rule 'max-lines' does not apply to a function; use max-lines-per-function"
-_UNUSED_MSG = "unused pymaxlines-disable directive (no findings were reported)"
+_UNUSED_MSG = (
+    "unused pymaxlines-disable directive (no findings were reported) [unused-disable-directive]"
+)
 _REPORT_FLAG = "--report-unused-disable-directives"
 _EXEMPT: tuple[int, list[str]] = (0, [])
 
@@ -109,7 +111,7 @@ def test_main_when_def_has_disable_but_sibling_does_not_does_still_report_siblin
     exit_code, lines = run_check(file)
 
     big_lineno = 1 + body_count + 3
-    big_total = body_count + 1
+    big_total = body_count
     assert exit_code == 1
     assert lines == [function_diagnostic(big_lineno, "big", big_total)]
 
@@ -129,7 +131,7 @@ def test_main_when_outer_has_disable_but_nested_is_oversized_does_still_report_n
 
     exit_code, lines = run_check(file)
 
-    nested_total = body_count + 1
+    nested_total = body_count
     assert exit_code == 1
     assert lines == [function_diagnostic(2, "nested", nested_total)]
 
@@ -184,7 +186,7 @@ def test_main_when_file_scope_disable_per_function_does_exempt_functions_but_che
 
     exit_code, lines = run_check(file)
 
-    total = oversized_count + MAX_LINES_SRC
+    total = oversized_count + 1 + MAX_LINES_SRC
     assert exit_code == 1
     assert lines == [file_diagnostic(total)]
 
@@ -208,22 +210,22 @@ def test_main_when_file_scope_disable_max_lines_does_still_report_oversized_func
 
 
 @pytest.mark.parametrize(
-    "relative_path",
+    ("relative_path", "rule"),
     [
-        pytest.param("module.py", id="src-file"),
-        pytest.param("tests/test_module.py", id="test-file-zero-function-limit"),
+        pytest.param("module.py", "banana", id="src-file"),
+        pytest.param("tests/test_module.py", "banana", id="test-file-zero-function-limit"),
     ],
 )
 def test_main_when_directive_has_unknown_rule_does_report_error(
-    tmp_path: Path, relative_path: str
+    tmp_path: Path, relative_path: str, rule: str
 ) -> None:
-    content = "# pymaxlines: disable=banana\n" + CODE_LINE * 5
+    content = f"# pymaxlines: disable={rule}\n" + CODE_LINE * 5
     file = write_module(tmp_path, content, relative_path)
 
     exit_code, lines = run_check(file)
 
     assert exit_code == 1
-    assert lines == [_unknown_rule(1)]
+    assert lines == [_unknown_rule(1, rule)]
 
 
 # ---------------------------------------------------------------------------
@@ -437,7 +439,9 @@ def test_main_when_directive_in_one_file_does_not_affect_another(
     exit_code, out = capture_main([str(exempt), str(oversized)])
 
     assert exit_code == 1
-    assert out == file_diagnostic(total, path=str(oversized)) + "\n"
+    out_lines = out.splitlines()
+    assert out_lines[0] == file_diagnostic(total, path=str(oversized))
+    assert out_lines[1] == "Found 1 error."
 
 
 # ---------------------------------------------------------------------------
@@ -485,22 +489,22 @@ def test_main_when_directive_in_one_file_does_not_affect_another(
         ),
         pytest.param(
             f"def big(\n    b):\n    x = 1  {_DISABLE}\n" + _OVERSIZED_BODY,
-            _misplaced(3, 1, (_OVERSIZED_COUNT - 1) + 3),
+            _misplaced(3, 1, _OVERSIZED_COUNT + 1),
             id="body-under-b-paren-colon",
         ),
         pytest.param(
             f"def big(\n    b) -> int:\n    x = 1  {_DISABLE}\n" + _OVERSIZED_BODY,
-            _misplaced(3, 1, (_OVERSIZED_COUNT - 1) + 3),
+            _misplaced(3, 1, _OVERSIZED_COUNT + 1),
             id="body-under-b-arrow-int-colon",
         ),
         pytest.param(
             f"def big(\n    a,\n):\n    x = 1  {_DISABLE}\n" + _OVERSIZED_BODY,
-            _misplaced(4, 1, (_OVERSIZED_COUNT - 1) + 4),
+            _misplaced(4, 1, _OVERSIZED_COUNT + 1),
             id="body-under-paren-colon-own-line",
         ),
         pytest.param(
             f"@decorator  {_DISABLE}\ndef big():\n" + _OVERSIZED_BODY,
-            _misplaced(1, 2, (_OVERSIZED_COUNT - 1) + 1),
+            _misplaced(1, 2, _OVERSIZED_COUNT),
             id="decorator-line",
         ),
         pytest.param(
@@ -510,7 +514,7 @@ def test_main_when_directive_in_one_file_does_not_affect_another(
         ),
         pytest.param(
             f"def big(\n    {_DISABLE}\n    a,\n):\n" + _OVERSIZED_BODY,
-            _misplaced(2, 1, (_OVERSIZED_COUNT - 1) + 3),
+            _misplaced(2, 1, _OVERSIZED_COUNT),
             id="comment-in-wrapped-sig",
         ),
         pytest.param(
@@ -562,7 +566,7 @@ def test_main_when_nested_def_has_directive_does_exempt_only_nested(
 
     exit_code, lines = run_check(file)
 
-    outer_count = 1 + 1 + body_count + 1 + MAX_LINES_PER_FUNCTION
+    outer_count = 1 + body_count + 1 + MAX_LINES_PER_FUNCTION
     assert exit_code == 1
     assert lines == [function_diagnostic(1, "outer", outer_count)]
 
@@ -632,10 +636,19 @@ def test_main_when_no_report_flag_and_directive_suppresses_nothing_does_stay_sil
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(f"def small():  {_DISABLE}\n    x = 1\n", id="short-body"),
+        pytest.param(
+            f"def big():  {_DISABLE}\n" + INDENTED_CODE_LINE * MAX_LINES_PER_FUNCTION,
+            id="body-at-limit",
+        ),
+    ],
+)
 def test_main_when_report_flag_and_def_directive_suppresses_nothing_does_report_unused(
-    tmp_path: Path,
+    tmp_path: Path, content: str
 ) -> None:
-    content = f"def small():  {_DISABLE}\n    x = 1\n"
     file = write_module(tmp_path, content)
 
     exit_code, lines = _run_check_unused(file)
@@ -733,7 +746,7 @@ def test_main_when_report_flag_and_mixed_findings_does_print_unused_after_limit_
     exit_code, lines = _run_check_unused(file)
 
     big_lineno = 6
-    big_total = body_count + 1
+    big_total = body_count
     assert exit_code == 1
     assert lines == [
         function_diagnostic(big_lineno, "big", big_total),

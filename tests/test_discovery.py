@@ -7,7 +7,14 @@ import textwrap
 from typing import TYPE_CHECKING
 
 import pytest
-from conftest import CODE_LINE, capture_main, file_diagnostic, write_code_lines, write_module
+from conftest import (
+    CODE_LINE,
+    capture_main,
+    diagnostic_lines,
+    file_diagnostic,
+    write_code_lines,
+    write_module,
+)
 
 from pymaxlines import MAX_LINES_SRC, MAX_LINES_TEST, main
 
@@ -18,6 +25,11 @@ if TYPE_CHECKING:
 def _posix(text: str) -> str:
     """Normalize Windows path separators to POSIX for portable assertions."""
     return text.replace(os.sep, "/")
+
+
+def _output_lines(output: str) -> list[str]:
+    """Return the diagnostic lines of *output*, normalized to POSIX separators."""
+    return diagnostic_lines(_posix(output))
 
 
 # test_discover_when_discovered_test_file_does_apply_test_limits relies on this
@@ -44,7 +56,8 @@ def test_discover_when_no_args_and_oversized_nested_file_does_report_relative_pa
     exit_code, output = capture_main([])
 
     assert exit_code == 1
-    assert _posix(output.strip()) == file_diagnostic(MAX_LINES_SRC + 1, path="pkg/big.py")
+    lines = _output_lines(output)
+    assert lines == [file_diagnostic(MAX_LINES_SRC + 1, path="pkg/big.py")]
 
 
 def test_discover_when_no_args_and_clean_tree_does_exit_zero(
@@ -74,7 +87,8 @@ def test_discover_when_directory_arg_does_walk_recursively_and_report_joined_pat
     exit_code, output = capture_main(["src/"])
 
     assert exit_code == 1
-    assert _posix(output.strip()) == file_diagnostic(MAX_LINES_SRC + 1, path="src/pkg/big.py")
+    lines = _output_lines(output)
+    assert lines == [file_diagnostic(MAX_LINES_SRC + 1, path="src/pkg/big.py")]
 
 
 def test_discover_when_multiple_directory_args_does_walk_in_given_order(
@@ -86,7 +100,7 @@ def test_discover_when_multiple_directory_args_does_walk_in_given_order(
 
     _exit_code, output = capture_main(["beta", "alpha"])
 
-    lines = _posix(output).strip().splitlines()
+    lines = _output_lines(output)
     beta_idx = _line_index(lines, "beta/fail.py")
     alpha_idx = _line_index(lines, "alpha/fail.py")
     assert beta_idx < alpha_idx
@@ -273,7 +287,7 @@ def test_discover_when_mixed_file_and_directory_args_does_report_in_argument_ord
 
     _exit_code, output = capture_main([str(explicit), "subdir"])
 
-    lines = _posix(output).strip().splitlines()
+    lines = _output_lines(output)
     explicit_idx = _line_index(lines, "explicit.py")
     inner_idx = _line_index(lines, "subdir/inner.py")
     assert explicit_idx < inner_idx
@@ -293,7 +307,7 @@ def test_discover_when_directory_has_multiple_files_does_report_in_sorted_order(
 
     _exit_code, output = capture_main(["pkg"])
 
-    lines = _posix(output).strip().splitlines()
+    lines = _output_lines(output)
     reported = [line.split(":")[0] for line in lines if "pkg/" in line]
     assert len(reported) == 3
     assert reported == sorted(reported)
@@ -449,7 +463,7 @@ def test_discover_when_same_directory_given_twice_does_report_each_file_once(
 
     _exit_code, output = capture_main(["src", "src"])
 
-    lines = [line for line in _posix(output).strip().splitlines() if "big.py" in line]
+    lines = [line for line in _output_lines(output) if "big.py" in line]
     assert len(lines) == 1
 
 
@@ -461,7 +475,7 @@ def test_discover_when_file_also_found_via_directory_walk_does_report_once(
 
     _exit_code, output = capture_main([".", "src/big.py"])
 
-    lines = [line for line in _posix(output).strip().splitlines() if "big.py" in line]
+    lines = [line for line in _output_lines(output) if "big.py" in line]
     assert len(lines) == 1
 
 
@@ -475,7 +489,7 @@ def test_discover_when_overlapping_args_does_deduplicate_and_preserve_first_seen
 
     _exit_code, output = capture_main([str(explicit), "src"])
 
-    lines = _posix(output).strip().splitlines()
+    lines = _output_lines(output)
     big_lines = [line for line in lines if "big.py" in line]
     assert len(big_lines) == 1
     big_idx = _line_index(lines, "big.py")

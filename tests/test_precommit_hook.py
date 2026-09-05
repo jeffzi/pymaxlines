@@ -130,6 +130,7 @@ def test_hook_when_file_or_function_exceeds_limit_does_fail_with_diagnostics(
     result = _run_hook(git_repo)
 
     assert result.returncode == 1
-    assert file_diagnostic(MAX_LINES_SRC + 1, path="oversized.py") in result.stdout
-    assert function_diagnostic(1, "big", func_count, path="big_function.py") in result.stdout
-    assert "0001_init.py" not in result.stdout
+    stdout = result.stdout
+    assert file_diagnostic(MAX_LINES_SRC + 1, path="oversized.py") in stdout
+    assert function_diagnostic(1, "big", func_count, path="big_function.py") in stdout
+    assert "0001_init.py" not in stdout

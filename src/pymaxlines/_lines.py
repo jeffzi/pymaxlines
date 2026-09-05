@@ -74,11 +74,18 @@ class _HeaderTracker:
     in_header: bool = False
     def_line: int = 0
     depth: int = 0
+    async_line: int = 0
 
     def feed(self, token: tokenize.TokenInfo) -> None:
+        if token.type == tokenize.NAME and token.string == "async":
+            self.async_line = token.start[0]
+            return
         if token.type == tokenize.NAME and token.string == "def":
             self.in_header = True
-            self.def_line = token.start[0]
+            # ast anchors AsyncFunctionDef.lineno at the `async` token, which
+            # can sit on an earlier physical line than `def` (explicit line
+            # joining). Prefer it so header_ranges matches the AST view.
+            self.def_line = self.async_line or token.start[0]
             self.depth = 0
         elif self.in_header and token.type == tokenize.OP:
             if token.string in OPEN_BRACKETS:
@@ -89,6 +96,7 @@ class _HeaderTracker:
                 for line in range(self.def_line, token.start[0] + 1):
                     self.header_ranges[line] = self.def_line
                 self.in_header = False
+        self.async_line = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,15 +218,25 @@ def oversized_functions(
     limit: int,
     *,
     exempt_lines: frozenset[int] = frozenset(),
+    header_ranges: Mapping[int, int],
 ) -> list[OversizedFunction]:
     """Find functions and async functions whose code-line count exceeds *limit*.
 
     A function's line count is the number of *code_lines* falling within its
-    ``[lineno, end_lineno]`` span, so it reflects whatever counting rules
-    (blank/comment/docstring skipping) the caller baked into *code_lines*.
-    Functions whose ``def`` line is in *exempt_lines* are skipped entirely.
-    Results are sorted by line number.
+    ``[lineno, end_lineno]`` span, excluding header lines (the ``def`` keyword
+    through the closing ``:``).  A header line is only excluded when it
+    precedes the first body statement; a one-liner's body line on the same
+    line as the ``def`` is still counted.
+
+    *header_ranges* maps each line of a ``def`` header to its ``def`` line
+    number (from ``TokenScan.header_ranges``).  Functions whose ``def`` line
+    is in *exempt_lines* are skipped entirely.  Results are sorted by line
+    number.
     """
+    headers_by_def: dict[int, set[int]] = {}
+    for line, def_line in header_ranges.items():
+        headers_by_def.setdefault(def_line, set()).add(line)
+
     oversized: list[OversizedFunction] = []
     for node in ast.walk(tree):
         if not isinstance(node, FUNCTION_DEF_TYPES):
@@ -226,7 +244,15 @@ def oversized_functions(
         if node.lineno in exempt_lines:
             continue
         end = node.end_lineno or node.lineno
-        count = sum(1 for number in code_lines if node.lineno <= number <= end)
+        body_start = node.body[0].lineno
+        header_only_lines = {
+            line for line in headers_by_def.get(node.lineno, ()) if line < body_start
+        }
+        count = sum(
+            1
+            for number in code_lines
+            if node.lineno <= number <= end and number not in header_only_lines
+        )
         if count > limit:
             oversized.append(OversizedFunction(node.name, node.lineno, count))
     oversized.sort(key=attrgetter("lineno"))

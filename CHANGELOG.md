@@ -7,6 +7,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- A `Found N errors.` summary line prints to stdout after the last diagnostic.
+
+### Changed
+
+- **Breaking:** Limit diagnostics (`max-lines`, `max-lines-per-function`) now use the standard
+  `path:line: message [rule-id]` format, with file diagnostics reported at line 1.
+- **Breaking:** A function's reported line count now excludes its `def` header — the `def` keyword
+  and every signature continuation line through the closing `:` are free. Existing
+  `max-lines-per-function` limits may need lowering to match the reduced counts.
+
 ## [0.5.0] - 2026-09-05
 
 ### Added
@@ -30,8 +42,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Unreadable files are now reported as "could not read" and files that fail to parse as "could not
-  parse".
+- Unreadable files and parse failures now report distinct diagnostics ("could not read" vs "could not
+  parse") instead of grouping both under "could not read".
 - A malformed directive segment following a valid one on the same comment line is now reported
   instead of ignored.
 - A directive comment inside a parenthesized decorator whose `@` sits alone on its line is now
