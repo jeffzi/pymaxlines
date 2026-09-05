@@ -481,3 +481,61 @@ def test_discover_when_overlapping_args_does_deduplicate_and_preserve_first_seen
     big_idx = _line_index(lines, "big.py")
     alpha_idx = _line_index(lines, "alpha.py")
     assert big_idx < alpha_idx
+
+
+# ---------------------------------------------------------------------------
+# Behavior 13: --force-exclude applies exclude globs to explicit paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("target_name", "exclude_pattern"),
+    [
+        pytest.param("generated/auto.py", "generated/*.py", id="glob-matches-file"),
+        pytest.param("migrations/0001_init.py", "migrations", id="dir-matches-parent"),
+        pytest.param("app/migrations/0001_init.py", "migrations", id="dir-matches-ancestor"),
+    ],
+)
+def test_discover_when_force_exclude_and_explicit_file_under_excluded_path_does_skip_it(
+    tmp_path: Path, target_name: str, exclude_pattern: str
+) -> None:
+    target = write_code_lines(tmp_path, MAX_LINES_SRC + 1, target_name)
+
+    exit_code, output = capture_main(["--force-exclude", "--exclude", exclude_pattern, str(target)])
+
+    assert exit_code == 0
+    assert output == ""
+
+
+def test_discover_when_force_exclude_and_explicit_directory_matches_exclude_does_not_walk_it(
+    tmp_path: Path,
+) -> None:
+    write_code_lines(tmp_path, MAX_LINES_SRC + 1, "migrations/0001.py")
+
+    exit_code, output = capture_main(["--force-exclude", "--exclude", "migrations", "migrations"])
+
+    assert exit_code == 0
+    assert output == ""
+
+
+def test_discover_when_force_exclude_and_non_matching_explicit_file_does_check_it(
+    tmp_path: Path,
+) -> None:
+    target = write_code_lines(tmp_path, MAX_LINES_SRC + 1, "app/main.py")
+
+    exit_code, _output = capture_main(["--force-exclude", "--exclude", "generated", str(target)])
+
+    assert exit_code == 1
+
+
+def test_discover_when_force_exclude_and_directory_walk_does_not_change_results(
+    tmp_path: Path,
+) -> None:
+    write_code_lines(tmp_path, MAX_LINES_SRC + 1, "generated/auto.py")
+    write_code_lines(tmp_path, MAX_LINES_SRC + 1, "src/app.py")
+
+    exit_code, output = capture_main(["--force-exclude", "--exclude", "generated"])
+
+    assert exit_code == 1
+    assert "src/app.py" in _posix(output)
+    assert "generated/auto.py" not in _posix(output)

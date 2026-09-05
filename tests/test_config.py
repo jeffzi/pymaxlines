@@ -288,6 +288,7 @@ def test_load_config_when_unknown_key_in_table_does_exit_two(
     [
         pytest.param("max-lines", '"banana"', id="string-for-limit"),
         pytest.param("skip-blank-lines", "42", id="int-for-bool"),
+        pytest.param("force-exclude", '"banana"', id="string-for-bool"),
         pytest.param("exclude", '"banana"', id="string-for-exclude"),
         pytest.param("exclude", "[42]", id="list-of-ints-for-exclude"),
     ],
@@ -380,6 +381,50 @@ def test_load_config_when_exclude_is_valid_list_does_not_alter_limits(
     )
 
     exit_code = main([str(file)])
+
+    assert exit_code == 1
+
+
+# ---------------------------------------------------------------------------
+# Behavior 9: force-exclude config and CLI precedence
+# ---------------------------------------------------------------------------
+
+
+def test_load_config_when_force_exclude_true_in_config_does_apply_exclude_to_explicit_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _project_with_config(
+        tmp_path,
+        monkeypatch,
+        """\
+        [tool.pymaxlines]
+        force-exclude = true
+        exclude = ["generated"]
+    """,
+    )
+    target_path = write_code_lines(tmp_path, MAX_LINES_SRC + 1, "generated/auto.py")
+
+    exit_code, output = capture_main([str(target_path)])
+
+    assert exit_code == 0
+    assert output == ""
+
+
+def test_load_config_when_no_force_exclude_cli_overrides_config_true_does_check_explicit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _project_with_config(
+        tmp_path,
+        monkeypatch,
+        """\
+        [tool.pymaxlines]
+        force-exclude = true
+        exclude = ["generated"]
+    """,
+    )
+    target = write_code_lines(tmp_path, MAX_LINES_SRC + 1, "generated/auto.py")
+
+    exit_code, _output = capture_main(["--no-force-exclude", str(target)])
 
     assert exit_code == 1
 

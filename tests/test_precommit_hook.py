@@ -123,9 +123,13 @@ def test_hook_when_file_or_function_exceeds_limit_does_fail_with_diagnostics(
     _stage(git_repo, "oversized.py", CODE_LINE * (MAX_LINES_SRC + 1))
     func_source, func_count = make_oversized_function()
     _stage(git_repo, "big_function.py", func_source)
+    pyproject = '[tool.pymaxlines]\nexclude = ["migrations"]\n'
+    _stage(git_repo, "pyproject.toml", pyproject)
+    _stage(git_repo, "migrations/0001_init.py", CODE_LINE * (MAX_LINES_SRC + 1))
 
     result = _run_hook(git_repo)
 
     assert result.returncode == 1
     assert file_diagnostic(MAX_LINES_SRC + 1, path="oversized.py") in result.stdout
     assert function_diagnostic(1, "big", func_count, path="big_function.py") in result.stdout
+    assert "0001_init.py" not in result.stdout

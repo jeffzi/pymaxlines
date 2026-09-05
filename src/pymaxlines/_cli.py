@@ -51,6 +51,7 @@ class Config:
     skip_comments: bool
     skip_docstrings: bool
     report_unused_disable_directives: bool
+    force_exclude: bool
     exclude: tuple[str, ...] = ()
 
 
@@ -309,6 +310,7 @@ def parse_args(argv: Sequence[str]) -> Config:
         skip_comments=ns.skip_comments,
         skip_docstrings=ns.skip_docstrings,
         report_unused_disable_directives=ns.report_unused_disable_directives,
+        force_exclude=ns.force_exclude,
         exclude=exclude,
     )
 
@@ -337,7 +339,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     console-script entry point.
     """
     config = parse_args(sys.argv[1:] if argv is None else argv)
-    files, walk_errors = discover_files(config.files, config.exclude)
+    files, walk_errors = discover_files(
+        config.files, config.exclude, force_exclude=config.force_exclude
+    )
     exit_code = 0
     try:
         for exc in walk_errors:

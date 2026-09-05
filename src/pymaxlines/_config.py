@@ -41,6 +41,11 @@ BOOL_SPECS: tuple[tuple[str, bool, str], ...] = (
         False,
         "report pymaxlines-disable directives that suppress no findings",
     ),
+    (
+        "force-exclude",
+        False,
+        "apply exclude globs to explicitly passed paths (default: %(default)s)",
+    ),
 )
 
 _LIMIT_KEYS = frozenset(name for name, _, _ in LIMIT_SPECS)
