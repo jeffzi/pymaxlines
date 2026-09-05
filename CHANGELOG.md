@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-05
+
 ### Added
 
 - A `Found N errors.` summary line prints to stdout after the last diagnostic.
@@ -79,7 +81,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function exceeds a code-line limit, counting only code lines and applying separate limits to test
   files.
 
-[Unreleased]: https://github.com/jeffzi/pymaxlines/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/jeffzi/pymaxlines/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/jeffzi/pymaxlines/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jeffzi/pymaxlines/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jeffzi/pymaxlines/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jeffzi/pymaxlines/releases/tag/v0.3.0

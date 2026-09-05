@@ -1,6 +1,6 @@
 [project]
 name = "pymaxlines"
-version = "0.5.0"
+version = "0.6.0"
 description = "Linter that caps code lines per file and per function"
 readme = "README.md"
 license = "MIT"
