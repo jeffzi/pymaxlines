@@ -5,13 +5,14 @@ from __future__ import annotations
 import contextlib
 import io
 import re
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
-from pymaxlines import MAX_LINES_PER_FUNCTION, MAX_LINES_SRC, main
+if TYPE_CHECKING:
+    from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from pymaxlines import MAX_LINES_PER_FUNCTION, MAX_LINES_SRC, main
 
 CODE_LINE = "x = 1\n"
 INDENTED_CODE_LINE = "    x = 1\n"

@@ -32,14 +32,13 @@ pymaxlines = "pymaxlines:main"
 [dependency-groups]
 dev = [
   "diff-cover>=10.5,<11",
-  "pre-commit>=4.6,<5",
-  "prek>=0.4.14,<0.5",
+  "prek>=0.5,<0.6",
   "pyrefly>=1.2,<2",
   "pytest>=9.1,<10",
   "pytest-cov>=7.1,<8",
   "pytest-randomly>=4.1,<5",
   "pytest-sugar>=1.1,<2",
-  "ruff>=0.16.4,<0.17",
+  "ruff>=0.16,<0.17",
 ]
 
 [build-system]
@@ -116,10 +115,9 @@ convention = "google"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov --cov-report=term-missing -m 'not e2e'"
+addopts = "--cov --cov-report=term-missing"
 filterwarnings = ["error"]
 xfail_strict = true
-markers = ["e2e: end-to-end tests that clone external repositories"]
 
 [tool.coverage.run]
 source = ["src"]

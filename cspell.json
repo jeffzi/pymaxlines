@@ -28,6 +28,7 @@
     "pyproject",
     "pyrefly",
     "pytest",
+    "pytrace",
     "Taskfile",
     "testpaths",
     "venv",
