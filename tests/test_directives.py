@@ -43,12 +43,14 @@ def _run_check_unused(file: Path, *extra_args: str) -> tuple[int, list[str]]:
     return run_check(file, _REPORT_FLAG, *extra_args)
 
 
-def _misplaced(directive_lineno: int, def_lineno: int, code_count: int) -> tuple[int, list[str]]:
+def _misplaced(
+    directive_lineno: int, def_lineno: int, code_count: int, end_lineno: int
+) -> tuple[int, list[str]]:
     return (
         1,
         [
             diagnostic(directive_lineno, _MISPLACED_MSG),
-            function_diagnostic(def_lineno, "big", code_count),
+            function_diagnostic(def_lineno, "big", code_count, end_lineno),
         ],
     )
 
@@ -112,8 +114,9 @@ def test_main_when_def_has_disable_but_sibling_does_not_does_still_report_siblin
 
     big_lineno = 1 + body_count + 3
     big_total = body_count
+    big_end = big_lineno + body_count
     assert exit_code == 1
-    assert lines == [function_diagnostic(big_lineno, "big", big_total)]
+    assert lines == [function_diagnostic(big_lineno, "big", big_total, big_end)]
 
 
 # ---------------------------------------------------------------------------
@@ -132,8 +135,9 @@ def test_main_when_outer_has_disable_but_nested_is_oversized_does_still_report_n
     exit_code, lines = run_check(file)
 
     nested_total = body_count
+    nested_end = 2 + body_count
     assert exit_code == 1
-    assert lines == [function_diagnostic(2, "nested", nested_total)]
+    assert lines == [function_diagnostic(2, "nested", nested_total, nested_end)]
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +205,8 @@ def test_main_when_file_scope_disable_max_lines_does_still_report_oversized_func
     exit_code, lines = run_check(file)
 
     assert exit_code == 1
-    assert lines == [function_diagnostic(2, "big", oversized_count)]
+    big_end = 2 + oversized_count
+    assert lines == [function_diagnostic(2, "big", oversized_count, big_end)]
 
 
 # ---------------------------------------------------------------------------
@@ -489,22 +494,22 @@ def test_main_when_directive_in_one_file_does_not_affect_another(
         ),
         pytest.param(
             f"def big(\n    b):\n    x = 1  {_DISABLE}\n" + _OVERSIZED_BODY,
-            _misplaced(3, 1, _OVERSIZED_COUNT + 1),
+            _misplaced(3, 1, _OVERSIZED_COUNT + 1, 3 + _OVERSIZED_COUNT),
             id="body-under-b-paren-colon",
         ),
         pytest.param(
             f"def big(\n    b) -> int:\n    x = 1  {_DISABLE}\n" + _OVERSIZED_BODY,
-            _misplaced(3, 1, _OVERSIZED_COUNT + 1),
+            _misplaced(3, 1, _OVERSIZED_COUNT + 1, 3 + _OVERSIZED_COUNT),
             id="body-under-b-arrow-int-colon",
         ),
         pytest.param(
             f"def big(\n    a,\n):\n    x = 1  {_DISABLE}\n" + _OVERSIZED_BODY,
-            _misplaced(4, 1, _OVERSIZED_COUNT + 1),
+            _misplaced(4, 1, _OVERSIZED_COUNT + 1, 4 + _OVERSIZED_COUNT),
             id="body-under-paren-colon-own-line",
         ),
         pytest.param(
             f"@decorator  {_DISABLE}\ndef big():\n" + _OVERSIZED_BODY,
-            _misplaced(1, 2, _OVERSIZED_COUNT),
+            _misplaced(1, 2, _OVERSIZED_COUNT, 2 + _OVERSIZED_COUNT),
             id="decorator-line",
         ),
         pytest.param(
@@ -514,7 +519,7 @@ def test_main_when_directive_in_one_file_does_not_affect_another(
         ),
         pytest.param(
             f"def big(\n    {_DISABLE}\n    a,\n):\n" + _OVERSIZED_BODY,
-            _misplaced(2, 1, _OVERSIZED_COUNT),
+            _misplaced(2, 1, _OVERSIZED_COUNT, 4 + _OVERSIZED_COUNT),
             id="comment-in-wrapped-sig",
         ),
         pytest.param(
@@ -567,8 +572,9 @@ def test_main_when_nested_def_has_directive_does_exempt_only_nested(
     exit_code, lines = run_check(file)
 
     outer_count = 1 + body_count + 1 + MAX_LINES_PER_FUNCTION
+    outer_end = 1 + outer_count
     assert exit_code == 1
-    assert lines == [function_diagnostic(1, "outer", outer_count)]
+    assert lines == [function_diagnostic(1, "outer", outer_count, outer_end)]
 
 
 # ---------------------------------------------------------------------------
@@ -747,9 +753,10 @@ def test_main_when_report_flag_and_mixed_findings_does_print_unused_after_limit_
 
     big_lineno = 6
     big_total = body_count
+    big_end = big_lineno + big_total
     assert exit_code == 1
     assert lines == [
-        function_diagnostic(big_lineno, "big", big_total),
+        function_diagnostic(big_lineno, "big", big_total, big_end),
         diagnostic(1, _UNUSED_MSG),
         diagnostic(2, _UNUSED_MSG),
     ]
@@ -806,17 +813,17 @@ def test_main_when_report_flag_and_directive_has_error_does_not_also_report_unus
     [
         pytest.param(
             "@decorator\n" + _DISABLE + "\ndef big():\n" + _OVERSIZED_BODY,
-            _misplaced(2, 3, _OVERSIZED_COUNT),
+            _misplaced(2, 3, _OVERSIZED_COUNT, 3 + _OVERSIZED_COUNT),
             id="func-comment-between-decorator-and-def",
         ),
         pytest.param(
             "@decorator1\n" + _DISABLE + "\n@decorator2\ndef big():\n" + _OVERSIZED_BODY,
-            _misplaced(2, 4, _OVERSIZED_COUNT),
+            _misplaced(2, 4, _OVERSIZED_COUNT, 4 + _OVERSIZED_COUNT),
             id="func-comment-between-two-decorators",
         ),
         pytest.param(
             "@decorator(\n    arg,\n    " + _DISABLE + "\n)\ndef big():\n" + _OVERSIZED_BODY,
-            _misplaced(3, 5, _OVERSIZED_COUNT),
+            _misplaced(3, 5, _OVERSIZED_COUNT, 5 + _OVERSIZED_COUNT),
             id="func-comment-inside-multi-line-decorator",
         ),
         pytest.param(
@@ -836,7 +843,7 @@ def test_main_when_report_flag_and_directive_has_error_does_not_also_report_unus
         ),
         pytest.param(
             "@(\n    " + _DISABLE + "\n    wrapper\n)\ndef big():\n" + _OVERSIZED_BODY,
-            _misplaced(2, 5, _OVERSIZED_COUNT),
+            _misplaced(2, 5, _OVERSIZED_COUNT, 5 + _OVERSIZED_COUNT),
             id="func-comment-inside-paren-wrapped-decorator",
         ),
         pytest.param(

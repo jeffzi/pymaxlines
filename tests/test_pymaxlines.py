@@ -240,7 +240,7 @@ def test_main_when_scan_tokens_raises_internal_error_does_propagate(
     # tokenize.TokenError` is deliberately narrow, and this pins that any
     # other exception propagates instead of being swallowed.
     with (
-        patch("pymaxlines._cli.scan_tokens", autospec=True, side_effect=exc_class(message)),
+        patch("pymaxlines._analysis.scan_tokens", autospec=True, side_effect=exc_class(message)),
         pytest.raises(exc_class, match=message),
     ):
         main([str(file)])
@@ -340,7 +340,8 @@ def test_main_when_function_exceeds_limit_does_report_name_line_and_count(
     exit_code, lines = run_check(file)
 
     assert exit_code == 1
-    assert lines == [function_diagnostic(1, "big", count)]
+    end_lineno = 1 + count
+    assert lines == [function_diagnostic(1, "big", count, end_lineno)]
 
 
 def test_main_when_nested_and_later_functions_oversized_does_report_in_line_order(
@@ -367,10 +368,12 @@ def test_main_when_nested_and_later_functions_oversized_does_report_in_line_orde
     exit_code, lines = run_check(file)
 
     assert exit_code == 1
+    inner_end = inner_start + inner_code_lines
+    later_end = later_start + later_code_lines
     assert lines == [
-        function_diagnostic(1, "outer", outer_code_lines),
-        function_diagnostic(inner_start, "inner", inner_code_lines),
-        function_diagnostic(later_start, "later", later_code_lines),
+        function_diagnostic(1, "outer", outer_code_lines, outer_span),
+        function_diagnostic(inner_start, "inner", inner_code_lines, inner_end),
+        function_diagnostic(later_start, "later", later_code_lines, later_end),
     ]
 
 
@@ -398,21 +401,29 @@ def test_main_when_function_has_non_code_content_does_not_count_it(
     assert exit_code == 0
 
 
-def test_main_when_multiline_def_has_docstring_on_closing_paren_does_count_that_line() -> None:
+@pytest.mark.parametrize(
+    ("source", "expected_end_lineno"),
+    [
+        pytest.param("def f(): x = 1\n", 1, id="one-liner-body-on-def-line"),
+        pytest.param('def f(\n    x,\n): "doc"\n', 3, id="docstring-on-closing-paren"),
+    ],
+)
+def test_oversized_functions_when_body_code_shares_signature_line_does_set_correct_end_lineno(
+    source: str, expected_end_lineno: int
+) -> None:
     # ): "doc" closes the signature AND carries body code — the line must be
     # counted as body. A CLI-level assertion can't distinguish that count
     # (1) from the wrongly-excluded count (0) here: limit=0 disables the
     # function check entirely, and any positive limit accepts count=1 too.
     # Checking oversized_functions() directly with limit=0 makes
     # `count > limit` distinguish the two cases.
-    source = 'def f(\n    x,\n): "doc"\n'
     tree = ast.parse(source)
     scan = scan_tokens(source)
     code_lines = code_line_numbers(source, tree, scan, skip_blank_lines=True, skip_docstrings=True)
 
     result = oversized_functions(tree, code_lines, limit=0, header_ranges=scan.header_ranges)
 
-    assert result == [OversizedFunction("f", 1, 1)]
+    assert result == [OversizedFunction("f", 1, 1, end_lineno=expected_end_lineno)]
 
 
 @pytest.mark.parametrize(
@@ -465,28 +476,44 @@ def test_main_when_function_limit_flags_vary_does_gate_the_check(
             "def big(\n    a,\n):\n",
             MAX_LINES_PER_FUNCTION + 1,
             1,
-            [function_diagnostic(1, "big", MAX_LINES_PER_FUNCTION + 1)],
+            [
+                function_diagnostic(
+                    1, "big", MAX_LINES_PER_FUNCTION + 1, 3 + MAX_LINES_PER_FUNCTION + 1
+                )
+            ],
             id="multiline-sig-over-limit",
         ),
         pytest.param(
             "async def big(\n    a,\n):\n",
             MAX_LINES_PER_FUNCTION + 1,
             1,
-            [function_diagnostic(1, "big", MAX_LINES_PER_FUNCTION + 1)],
+            [
+                function_diagnostic(
+                    1, "big", MAX_LINES_PER_FUNCTION + 1, 3 + MAX_LINES_PER_FUNCTION + 1
+                )
+            ],
             id="async-multiline-sig",
         ),
         pytest.param(
             "def big(\n    a,\n) -> dict[str, int]:\n",
             MAX_LINES_PER_FUNCTION + 1,
             1,
-            [function_diagnostic(1, "big", MAX_LINES_PER_FUNCTION + 1)],
+            [
+                function_diagnostic(
+                    1, "big", MAX_LINES_PER_FUNCTION + 1, 3 + MAX_LINES_PER_FUNCTION + 1
+                )
+            ],
             id="return-annotation-after-paren",
         ),
         pytest.param(
             "def big(x=lambda: 1) -> dict[str, int]:\n",
             MAX_LINES_PER_FUNCTION + 1,
             1,
-            [function_diagnostic(1, "big", MAX_LINES_PER_FUNCTION + 1)],
+            [
+                function_diagnostic(
+                    1, "big", MAX_LINES_PER_FUNCTION + 1, 1 + MAX_LINES_PER_FUNCTION + 1
+                )
+            ],
             id="default-with-lambda-and-annotation",
         ),
     ],
@@ -517,7 +544,8 @@ def test_main_when_no_skip_comments_does_count_comment_after_header_but_not_head
     exit_code, lines = run_check(file, "--no-skip-comments")
 
     assert exit_code == 1
-    assert lines == [function_diagnostic(1, "big", body + 1)]
+    end_lineno = 2 + body
+    assert lines == [function_diagnostic(1, "big", body + 1, end_lineno)]
 
 
 def test_main_when_file_over_limit_does_count_header_lines_in_file_total(

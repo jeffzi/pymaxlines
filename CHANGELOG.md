@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `--show-sizes` flag that prints a code-line breakdown of every file instead of checking limits.
+
+### Changed
+
+- **Breaking:** Function diagnostics now include the function's line range in the parenthetical, so
+  output parsers must be updated.
+
 ## [0.6.0] - 2026-09-05
 
 ### Added

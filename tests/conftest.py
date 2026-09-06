@@ -39,16 +39,18 @@ def function_diagnostic(
     lineno: int,
     name: str,
     count: int,
+    end_lineno: int,
+    *,
     limit: int = MAX_LINES_PER_FUNCTION,
-    path: str = PLACEHOLDER,
 ) -> str:
     """Return the expected function-level diagnostic.
 
-    Format: ``path:lineno: Too many lines in function 'name' (count > limit) [max-lines-per-function]``
+    Format: ``PLACEHOLDER:lineno: Too many lines in function 'name' (count > limit, lines L-E) [max-lines-per-function]``
     """
-    return (
-        f"{path}:{lineno}: Too many lines in function '{name}'"
-        f" ({count} > {limit}) [max-lines-per-function]"
+    return diagnostic(
+        lineno,
+        f"Too many lines in function '{name}'"
+        f" ({count} > {limit}, lines {lineno}-{end_lineno}) [max-lines-per-function]",
     )
 
 

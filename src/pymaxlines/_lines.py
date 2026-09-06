@@ -44,6 +44,11 @@ def is_docstring_stmt(stmt: ast.stmt) -> bool:
     )
 
 
+def _node_end(node: ast.stmt) -> int:
+    """Return *node*'s end line, falling back to its start line when unset."""
+    return node.end_lineno or node.lineno
+
+
 def docstring_lines(tree: ast.Module) -> set[int]:
     """Line numbers covered by the docstring of the module, a class, or a function.
 
@@ -58,7 +63,7 @@ def docstring_lines(tree: ast.Module) -> set[int]:
             continue
         first = node.body[0]
         if is_docstring_stmt(first):
-            lines.update(range(first.lineno, (first.end_lineno or first.lineno) + 1))
+            lines.update(range(first.lineno, _node_end(first) + 1))
     return lines
 
 
@@ -210,6 +215,36 @@ class OversizedFunction:
     name: str
     lineno: int
     count: int
+    end_lineno: int
+
+
+def build_headers_by_def(header_ranges: Mapping[int, int]) -> dict[int, frozenset[int]]:
+    """Group *header_ranges* by def line, returning ``{def_line: frozenset(header_lines)}``."""
+    by_def: dict[int, set[int]] = {}
+    for line, def_line in header_ranges.items():
+        by_def.setdefault(def_line, set()).add(line)
+    return {def_line: frozenset(lines) for def_line, lines in by_def.items()}
+
+
+def span_code_line_count(start: int, end: int, code_lines: set[int] | frozenset[int]) -> int:
+    """Return the number of *code_lines* in the closed interval ``[start, end]``."""
+    return sum(1 for number in code_lines if start <= number <= end)
+
+
+def function_code_line_count(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    code_lines: set[int] | frozenset[int],
+    headers_by_def: dict[int, frozenset[int]],
+) -> int:
+    """Return the code-line count for *node*, excluding header lines before the body."""
+    end = _node_end(node)
+    body_start = node.body[0].lineno
+    header_only = {
+        line for line in headers_by_def.get(node.lineno, frozenset()) if line < body_start
+    }
+    return sum(
+        1 for number in code_lines if node.lineno <= number <= end and number not in header_only
+    )
 
 
 def oversized_functions(
@@ -233,9 +268,7 @@ def oversized_functions(
     is in *exempt_lines* are skipped entirely.  Results are sorted by line
     number.
     """
-    headers_by_def: dict[int, set[int]] = {}
-    for line, def_line in header_ranges.items():
-        headers_by_def.setdefault(def_line, set()).add(line)
+    headers_by_def = build_headers_by_def(header_ranges)
 
     oversized: list[OversizedFunction] = []
     for node in ast.walk(tree):
@@ -243,17 +276,8 @@ def oversized_functions(
             continue
         if node.lineno in exempt_lines:
             continue
-        end = node.end_lineno or node.lineno
-        body_start = node.body[0].lineno
-        header_only_lines = {
-            line for line in headers_by_def.get(node.lineno, ()) if line < body_start
-        }
-        count = sum(
-            1
-            for number in code_lines
-            if node.lineno <= number <= end and number not in header_only_lines
-        )
+        count = function_code_line_count(node, code_lines, headers_by_def)
         if count > limit:
-            oversized.append(OversizedFunction(node.name, node.lineno, count))
+            oversized.append(OversizedFunction(node.name, node.lineno, count, _node_end(node)))
     oversized.sort(key=attrgetter("lineno"))
     return oversized
