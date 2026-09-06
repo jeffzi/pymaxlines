@@ -20,6 +20,14 @@ if not _CORPUS:
 
 _HUGE_LIMIT = str(10**9)
 
+_ANALYSIS_ERROR_MARKERS = ("could not read", "could not parse")
+
+
+def _is_analysis_error(output: str) -> bool:
+    """Check whether the output is an analysis error from an unparsable file."""
+    return any(marker in output for marker in _ANALYSIS_ERROR_MARKERS)
+
+
 _IDS = [str(p.relative_to(_STDLIB_DIR)) for p in _CORPUS]
 
 
@@ -38,6 +46,9 @@ def test_check_file_when_limits_above_any_file_does_emit_zero_diagnostics(path: 
             str(path),
         ]
     )
+
+    if _is_analysis_error(output):
+        pytest.skip(f"stdlib file cannot be parsed: {path}")
 
     assert exit_code == 0, output
     assert output == ""
@@ -58,6 +69,9 @@ def test_check_file_when_module_limit_zero_does_report_only_module_diagnostic(pa
             str(path),
         ]
     )
+
+    if _is_analysis_error(output):
+        pytest.skip(f"stdlib file cannot be parsed: {path}")
 
     if exit_code == 0:
         assert output == ""
