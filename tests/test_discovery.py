@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import textwrap
 from typing import TYPE_CHECKING
 
@@ -48,10 +49,9 @@ def _line_index(lines: list[str], needle: str) -> int:
 
 
 def test_discover_when_no_args_and_oversized_nested_file_does_report_relative_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "pkg/big.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, output = capture_main([])
 
@@ -60,12 +60,9 @@ def test_discover_when_no_args_and_oversized_nested_file_does_report_relative_pa
     assert lines == [file_diagnostic(MAX_LINES_SRC + 1, path="pkg/big.py")]
 
 
-def test_discover_when_no_args_and_clean_tree_does_exit_zero(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discover_when_no_args_and_clean_tree_does_exit_zero(tmp_path: Path) -> None:
     write_code_lines(tmp_path, 1, "ok.py")
     write_code_lines(tmp_path, 1, "sub/also_ok.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, output = capture_main([])
 
@@ -79,10 +76,9 @@ def test_discover_when_no_args_and_clean_tree_does_exit_zero(
 
 
 def test_discover_when_directory_arg_does_walk_recursively_and_report_joined_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "src/pkg/big.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, output = capture_main(["src/"])
 
@@ -91,12 +87,9 @@ def test_discover_when_directory_arg_does_walk_recursively_and_report_joined_pat
     assert lines == [file_diagnostic(MAX_LINES_SRC + 1, path="src/pkg/big.py")]
 
 
-def test_discover_when_multiple_directory_args_does_walk_in_given_order(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discover_when_multiple_directory_args_does_walk_in_given_order(tmp_path: Path) -> None:
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "beta/fail.py")
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "alpha/fail.py")
-    monkeypatch.chdir(tmp_path)
 
     _exit_code, output = capture_main(["beta", "alpha"])
 
@@ -126,11 +119,10 @@ def test_discover_when_multiple_directory_args_does_walk_in_given_order(
     ],
 )
 def test_discover_when_file_in_skip_directory_does_not_check_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, skip_dir: str
+    tmp_path: Path, skip_dir: str
 ) -> None:
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, f"{skip_dir}/bad.py")
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "found.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, output = capture_main([])
 
@@ -139,12 +131,9 @@ def test_discover_when_file_in_skip_directory_does_not_check_it(
     assert skip_dir not in output
 
 
-def test_discover_when_skip_directory_nested_deeply_does_not_check_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discover_when_skip_directory_nested_deeply_does_not_check_it(tmp_path: Path) -> None:
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "a/b/.venv/bad.py")
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "a/found.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, output = capture_main([])
 
@@ -158,46 +147,35 @@ def test_discover_when_skip_directory_nested_deeply_does_not_check_it(
 # ---------------------------------------------------------------------------
 
 
-def test_discover_when_exclude_glob_matches_file_does_skip_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discover_when_exclude_glob_matches_file_does_skip_it(tmp_path: Path) -> None:
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "src/generated/auto.py")
     write_code_lines(tmp_path, 1, "src/real.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, _output = capture_main(["--exclude", "src/generated/*.py"])
 
     assert exit_code == 0
 
 
-def test_discover_when_exclude_matches_final_component_does_skip_directory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discover_when_exclude_matches_final_component_does_skip_directory(tmp_path: Path) -> None:
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "migrations/0001.py")
     write_code_lines(tmp_path, 1, "app.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, _output = capture_main(["--exclude", "migrations"])
 
     assert exit_code == 0
 
 
-def test_discover_when_multiple_exclude_flags_does_skip_all(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discover_when_multiple_exclude_flags_does_skip_all(tmp_path: Path) -> None:
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "gen/auto.py")
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "vendor/lib.py")
     write_code_lines(tmp_path, 1, "app.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, _output = capture_main(["--exclude", "gen", "--exclude", "vendor"])
 
     assert exit_code == 0
 
 
-def test_discover_when_cli_exclude_does_replace_config_exclude(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discover_when_cli_exclude_does_replace_config_exclude(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
         textwrap.dedent("""\
         [tool.pymaxlines]
@@ -206,7 +184,6 @@ def test_discover_when_cli_exclude_does_replace_config_exclude(
     )
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "conf_excluded/bad.py")
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "cli_excluded/bad.py")
-    monkeypatch.chdir(tmp_path)
 
     _exit_code, output = capture_main(["--exclude", "cli_excluded"])
 
@@ -214,9 +191,7 @@ def test_discover_when_cli_exclude_does_replace_config_exclude(
     assert "cli_excluded" not in _posix(output)
 
 
-def test_discover_when_config_exclude_and_no_cli_exclude_does_use_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discover_when_config_exclude_and_no_cli_exclude_does_use_config(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
         textwrap.dedent("""\
         [tool.pymaxlines]
@@ -225,7 +200,6 @@ def test_discover_when_config_exclude_and_no_cli_exclude_does_use_config(
     )
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "conf_excluded/bad.py")
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "visible.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, output = capture_main([])
 
@@ -239,34 +213,25 @@ def test_discover_when_config_exclude_and_no_cli_exclude_does_use_config(
 # ---------------------------------------------------------------------------
 
 
-def test_discover_when_explicit_file_in_skip_dir_does_check_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discover_when_explicit_file_in_skip_dir_does_check_it(tmp_path: Path) -> None:
     target = write_code_lines(tmp_path, MAX_LINES_SRC + 1, ".venv/bad.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, _output = capture_main([str(target)])
 
     assert exit_code == 1
 
 
-def test_discover_when_explicit_file_matches_exclude_does_check_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discover_when_explicit_file_matches_exclude_does_check_it(tmp_path: Path) -> None:
     target = write_code_lines(tmp_path, MAX_LINES_SRC + 1, "generated/auto.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, _output = capture_main(["--exclude", "generated", str(target)])
 
     assert exit_code == 1
 
 
-def test_discover_when_explicit_file_without_py_suffix_does_check_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discover_when_explicit_file_without_py_suffix_does_check_it(tmp_path: Path) -> None:
     content = CODE_LINE * (MAX_LINES_SRC + 1)
     target = write_module(tmp_path, content, "script")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, _output = capture_main([str(target)])
 
@@ -279,11 +244,10 @@ def test_discover_when_explicit_file_without_py_suffix_does_check_it(
 
 
 def test_discover_when_mixed_file_and_directory_args_does_report_in_argument_order(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     explicit = write_code_lines(tmp_path, MAX_LINES_SRC + 1, "explicit.py")
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "subdir/inner.py")
-    monkeypatch.chdir(tmp_path)
 
     _exit_code, output = capture_main([str(explicit), "subdir"])
 
@@ -299,11 +263,10 @@ def test_discover_when_mixed_file_and_directory_args_does_report_in_argument_ord
 
 
 def test_discover_when_directory_has_multiple_files_does_report_in_sorted_order(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     for name in ["z.py", "a.py", "m.py"]:
         write_code_lines(tmp_path, MAX_LINES_SRC + 1, f"pkg/{name}")
-    monkeypatch.chdir(tmp_path)
 
     _exit_code, output = capture_main(["pkg"])
 
@@ -318,9 +281,7 @@ def test_discover_when_directory_has_multiple_files_does_report_in_sorted_order(
 # ---------------------------------------------------------------------------
 
 
-def test_discover_when_symlinked_directory_does_not_descend(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discover_when_symlinked_directory_does_not_descend(tmp_path: Path) -> None:
     real_dir = tmp_path / "real"
     real_dir.mkdir()
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "real/bad.py")
@@ -333,7 +294,6 @@ def test_discover_when_symlinked_directory_does_not_descend(
         pytest.skip("symlink creation not permitted on this platform")
 
     write_code_lines(tmp_path, 1, "pkg/ok.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, _output = capture_main(["pkg"])
 
@@ -345,13 +305,10 @@ def test_discover_when_symlinked_directory_does_not_descend(
 # ---------------------------------------------------------------------------
 
 
-def test_discover_when_discovered_test_file_does_apply_test_limits(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discover_when_discovered_test_file_does_apply_test_limits(tmp_path: Path) -> None:
     count = MAX_LINES_SRC + 1
     write_code_lines(tmp_path, count, "tests/test_x.py")
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "src/over.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, output = capture_main([])
 
@@ -366,9 +323,8 @@ def test_discover_when_discovered_test_file_does_apply_test_limits(
 
 
 def test_discover_when_empty_tree_does_warn_no_py_files_and_exit_zero(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.chdir(tmp_path)
 
     exit_code = main([])
 
@@ -379,10 +335,9 @@ def test_discover_when_empty_tree_does_warn_no_py_files_and_exit_zero(
 
 
 def test_discover_when_exclude_filters_everything_does_warn_no_py_files_and_exit_zero(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "generated/auto.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code = main(["--exclude", "generated"])
 
@@ -399,7 +354,7 @@ def test_discover_when_exclude_filters_everything_does_warn_no_py_files_and_exit
 
 
 def test_discover_when_exclude_glob_includes_directory_arg_prefix_does_skip_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     """``pymaxlines src --exclude "src/generated/*.py"`` must exclude src/generated/auto.py.
 
@@ -408,7 +363,6 @@ def test_discover_when_exclude_glob_includes_directory_arg_prefix_does_skip_file
     """
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "src/generated/auto.py")
     write_code_lines(tmp_path, 1, "src/real.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, output = capture_main(["src", "--exclude", "src/generated/*.py"])
 
@@ -416,9 +370,7 @@ def test_discover_when_exclude_glob_includes_directory_arg_prefix_does_skip_file
     assert "auto.py" not in output
 
 
-def test_discover_when_config_exclude_glob_has_path_prefix_does_skip_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discover_when_config_exclude_glob_has_path_prefix_does_skip_file(tmp_path: Path) -> None:
     """Config exclude behaves the same as --exclude for glob-with-prefix patterns."""
     (tmp_path / "pyproject.toml").write_text(
         textwrap.dedent("""\
@@ -428,7 +380,6 @@ def test_discover_when_config_exclude_glob_has_path_prefix_does_skip_file(
     )
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "src/generated/auto.py")
     write_code_lines(tmp_path, 1, "src/real.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, output = capture_main(["src"])
 
@@ -437,12 +388,11 @@ def test_discover_when_config_exclude_glob_has_path_prefix_does_skip_file(
 
 
 def test_discover_when_exclude_glob_matches_directory_in_reported_path_does_prune(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     """``pymaxlines src --exclude "src/generated"`` should prune the directory."""
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "src/generated/auto.py")
     write_code_lines(tmp_path, 1, "src/real.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, output = capture_main(["src", "--exclude", "src/generated"])
 
@@ -456,10 +406,9 @@ def test_discover_when_exclude_glob_matches_directory_in_reported_path_does_prun
 
 
 def test_discover_when_same_directory_given_twice_does_report_each_file_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "src/big.py")
-    monkeypatch.chdir(tmp_path)
 
     _exit_code, output = capture_main(["src", "src"])
 
@@ -467,11 +416,8 @@ def test_discover_when_same_directory_given_twice_does_report_each_file_once(
     assert len(lines) == 1
 
 
-def test_discover_when_file_also_found_via_directory_walk_does_report_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_discover_when_file_also_found_via_directory_walk_does_report_once(tmp_path: Path) -> None:
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "src/big.py")
-    monkeypatch.chdir(tmp_path)
 
     _exit_code, output = capture_main([".", "src/big.py"])
 
@@ -480,12 +426,11 @@ def test_discover_when_file_also_found_via_directory_walk_does_report_once(
 
 
 def test_discover_when_overlapping_args_does_deduplicate_and_preserve_first_seen_order(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     """Explicit file before directory walk: file appears once at its first position."""
     explicit = write_code_lines(tmp_path, MAX_LINES_SRC + 1, "src/big.py")
     write_code_lines(tmp_path, MAX_LINES_SRC + 1, "src/alpha.py")
-    monkeypatch.chdir(tmp_path)
 
     _exit_code, output = capture_main([str(explicit), "src"])
 
@@ -553,3 +498,148 @@ def test_discover_when_force_exclude_and_directory_walk_does_not_change_results(
     assert exit_code == 1
     assert "src/app.py" in _posix(output)
     assert "generated/auto.py" not in _posix(output)
+
+
+# ---------------------------------------------------------------------------
+# Behavior 14: --force-exclude with absolute path outside cwd tests filename
+#              only, not ancestor components
+# ---------------------------------------------------------------------------
+
+
+def test_discover_when_force_exclude_and_absolute_path_outside_cwd_does_not_exclude_by_ancestor(
+    tmp_path: Path,
+) -> None:
+    """An absolute path NOT under cwd has only its filename tested against globs.
+
+    ``cwd=work``, ``--exclude build``, path ``/outside/build/proj/app.py``.
+    ``build`` is an ancestor component outside cwd — it must NOT match the
+    exclude glob.  The file should be checked.
+    """
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    outside = tmp_path / "outside" / "build" / "proj"
+    outside.mkdir(parents=True)
+    target = outside / "app.py"
+    target.write_text("x = 1\n" * (MAX_LINES_SRC + 1))
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(work_dir)
+    try:
+        exit_code, output = capture_main(["--force-exclude", "--exclude", "build", str(target)])
+    finally:
+        monkeypatch.undo()
+
+    assert exit_code == 1
+    assert "app.py" in output
+
+
+def test_discover_when_force_exclude_and_absolute_path_outside_cwd_does_exclude_by_filename(
+    tmp_path: Path,
+) -> None:
+    """An absolute path NOT under cwd is still excluded when its filename matches."""
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    outside = tmp_path / "outside" / "proj"
+    outside.mkdir(parents=True)
+    target = outside / "generated.py"
+    target.write_text("x = 1\n" * (MAX_LINES_SRC + 1))
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(work_dir)
+    try:
+        exit_code, output = capture_main(
+            ["--force-exclude", "--exclude", "generated*", str(target)]
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert exit_code == 0
+    assert output == ""
+
+
+# ---------------------------------------------------------------------------
+# Behavior 15: directory symlinks during walk are silently skipped
+# ---------------------------------------------------------------------------
+
+
+def test_discover_when_walk_encounters_symlink_to_directory_does_not_report_error(
+    tmp_path: Path,
+) -> None:
+    """A ``.py``-named symlink pointing to a directory must be silently skipped.
+
+    ``Path.walk(follow_symlinks=False)`` places symlinked directories in
+    ``filenames``, not ``dirnames``.  Without filtering, the checker tries to
+    open the symlink as a file and emits a ``could not read (Is a directory)``
+    diagnostic.  The ``.py`` suffix is needed to trigger the bug — non-``.py``
+    names are already filtered out before open.
+    """
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    (real_dir / "inner.py").write_text("x = 1\n")
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    link = pkg / "linked.py"
+    try:
+        link.symlink_to(real_dir)
+    except OSError:
+        pytest.skip("symlink creation not permitted on this platform")
+
+    write_code_lines(tmp_path, 1, "pkg/ok.py")
+
+    exit_code, output = capture_main(["pkg"])
+
+    assert exit_code == 0
+    assert "could not read" not in output
+    assert "Is a directory" not in output
+
+
+def test_discover_when_walk_encounters_symlink_to_file_does_check_it(
+    tmp_path: Path,
+) -> None:
+    """A symlink to a regular .py file is still discovered and checked normally."""
+    real_file = tmp_path / "real" / "source.py"
+    real_file.parent.mkdir()
+    real_file.write_text("x = 1\n" * (MAX_LINES_SRC + 1))
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    link = pkg / "linked.py"
+    try:
+        link.symlink_to(real_file)
+    except OSError:
+        pytest.skip("symlink creation not permitted on this platform")
+
+    exit_code, output = capture_main(["pkg"])
+
+    assert exit_code == 1
+    assert "linked.py" in output
+
+
+# ---------------------------------------------------------------------------
+# Behavior 16: overlapping arguments deduplicate walk errors
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or getattr(os, "getuid", lambda: -1)() == 0,
+    reason="Windows ignores POSIX permission bits; root bypasses them",
+)
+def test_discover_when_overlapping_args_hit_same_walk_error_does_report_once(
+    tmp_path: Path,
+) -> None:
+    """``pymaxlines . src`` with unreadable ``src/restricted`` prints one error, not two."""
+    restricted = tmp_path / "src" / "restricted"
+    restricted.mkdir(parents=True)
+    write_code_lines(tmp_path, 1, "src/ok.py")
+    restricted.chmod(0o000)
+
+    try:
+        _exit_code, output = capture_main([".", "src"])
+    finally:
+        restricted.chmod(0o755)
+
+    error_lines = [line for line in output.splitlines() if "restricted" in line]
+    assert len(error_lines) == 1

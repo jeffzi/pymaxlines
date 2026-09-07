@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -13,7 +12,6 @@ if TYPE_CHECKING:
 SKIP_DIRS: frozenset[str] = frozenset(
     {
         ".git",
-        ".venv",
         "node_modules",
         "__pycache__",
         ".tox",
@@ -36,7 +34,7 @@ def _is_excluded(candidates: Iterable[str], exclude: tuple[str, ...]) -> bool:
 def _relative_paths(entry: Path, root: Path) -> tuple[str, str]:
     """Return *entry* relative to *root*, and re-rooted, both as posix strings for glob matching."""
     rel = entry.relative_to(root).as_posix()
-    return rel, (root / rel).as_posix()
+    return rel, entry.as_posix()
 
 
 def _walk_directory(root: Path, exclude: tuple[str, ...]) -> tuple[list[Path], list[OSError]]:
@@ -44,6 +42,11 @@ def _walk_directory(root: Path, exclude: tuple[str, ...]) -> tuple[list[Path], l
 
     Prunes skip directories and excluded directories in-place so ``Path.walk``
     never descends into them.  Symlinked directories are not followed.
+    Entries in *filenames* that are symlinks pointing to directories are
+    silently skipped — ``Path.walk(follow_symlinks=False)`` places them in
+    *filenames*, not *dirnames*, so without filtering they would be opened as
+    regular files and raise ``IsADirectoryError``.
+
     Directories that raise ``OSError`` while being listed (e.g. permission
     denied) are collected in the returned error list instead of being
     silently skipped.
@@ -62,8 +65,11 @@ def _walk_directory(root: Path, exclude: tuple[str, ...]) -> tuple[list[Path], l
         for fname in sorted(filenames):
             if not fname.endswith(".py"):
                 continue
-            if not _is_excluded((fname, *_relative_paths(dirpath / fname, root)), exclude):
-                results.append(dirpath / fname)
+            entry = dirpath / fname
+            if entry.is_symlink() and entry.is_dir():
+                continue
+            if not _is_excluded((fname, *_relative_paths(entry, root)), exclude):
+                results.append(entry)
     return results, errors
 
 
@@ -80,16 +86,32 @@ def _explicit_path_excluded(path: Path, exclude: tuple[str, ...]) -> bool:
     unrelated ancestor directories (e.g. a home directory named ``build``)
     are never tested.
     """
-    candidate = path
     if path.is_absolute():
-        with contextlib.suppress(ValueError):
+        try:
             candidate = path.relative_to(Path.cwd())
+        except ValueError:
+            return _is_excluded((path.name,), exclude)
+    else:
+        candidate = path
     parts = candidate.parts
     for i, name in enumerate(parts, start=1):
         prefix = Path(*parts[:i]).as_posix()
         if _is_excluded((name, prefix), exclude):
             return True
     return False
+
+
+def _collect_unique_error(
+    exc: OSError,
+    seen_error_paths: set[Path],
+    errors: list[OSError],
+) -> None:
+    """Append *exc* to *errors* unless its filename has already been seen."""
+    resolved = Path(exc.filename).resolve() if exc.filename else None
+    if resolved is None or resolved not in seen_error_paths:
+        if resolved is not None:
+            seen_error_paths.add(resolved)
+        errors.append(exc)
 
 
 def discover_files(
@@ -116,22 +138,24 @@ def discover_files(
     result: list[Path] = []
     seen: set[Path] = set()
     errors: list[OSError] = []
-
-    def _add_unseen(candidate: Path) -> None:
-        resolved = candidate.resolve()
-        if resolved not in seen:
-            seen.add(resolved)
-            result.append(candidate)
+    seen_error_paths: set[Path] = set()
 
     for path in paths:
-        if force_exclude and exclude and _explicit_path_excluded(path, exclude):
+        if force_exclude and _explicit_path_excluded(path, exclude):
             continue
         if path.is_dir():
             files, walk_errors = _walk_directory(path, exclude)
             for f in files:
-                _add_unseen(f)
-            errors.extend(walk_errors)
+                resolved = f.resolve()
+                if resolved not in seen:
+                    seen.add(resolved)
+                    result.append(f)
+            for exc in walk_errors:
+                _collect_unique_error(exc, seen_error_paths, errors)
         else:
-            _add_unseen(path)
+            resolved = path.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                result.append(path)
 
     return result, errors
