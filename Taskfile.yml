@@ -47,8 +47,8 @@ tasks:
         cmd: UV_PROJECT_ENVIRONMENT=.venv-{{.ITEM}} uv run --python {{.ITEM}} --locked pytest
 
   check:
-    desc: Run every pre-commit hook across the repo (lint, format, type, spelling, actions, ...)
-    deps: [_require-uv, _require-dprint]
+    desc: Run every pre-commit-stage hook across the repo
+    deps: [_sync, _require-dprint]
     cmds:
       - uv run prek run -a
 
@@ -64,4 +64,4 @@ tasks:
   clean:
     desc: Remove build artifacts, caches, and virtualenvs
     cmds:
-      - rm -rf .venv .venv-* dist *.egg-info .pytest_cache .ruff_cache .hypothesis .coverage .coverage.* coverage.xml
+      - rm -rf .venv .venv-* dist .pytest_cache .ruff_cache .coverage .coverage.* coverage.xml htmlcov .cache

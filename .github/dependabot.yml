@@ -7,7 +7,8 @@ updates:
       day: monday
     cooldown:
       default-days: 7
-  # Security updates only — version bumps are handled by update-tools.yml
+  # Security updates only — the weekly workflow refreshes within declared bounds;
+  # raising an upper bound is a manual change.
   - package-ecosystem: uv
     directory: /
     schedule:

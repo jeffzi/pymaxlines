@@ -122,14 +122,11 @@ xfail_strict = true
 [tool.coverage.run]
 source = ["src"]
 branch = true
-parallel = true
 
 [tool.coverage.report]
 exclude_lines = [
   "pragma: no cover",
   "if TYPE_CHECKING:",
   "if __name__ == .__main__.",
-  "raise NotImplementedError",
 ]
-show_missing = true
 fail_under = 90

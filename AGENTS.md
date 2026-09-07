@@ -16,7 +16,7 @@ manage the virtualenv, file selection, and flags.
 - `task test` — `uv run pytest` (append args after `--`, e.g. `task test -- -k name`; passing args
   disables coverage, since a subset run would fail the global coverage threshold).
 - `task test:matrix` — run the suite on every supported Python version.
-- `task check` — `uv run prek run -a` (all hooks). Run before committing.
+- `task check` — `uv run prek run -a` (pre-commit-stage hooks). Run before committing.
 - To run a single hook: `uv run prek run <hook-id>` (e.g. `uv run prek run max-lines`). Hook IDs
   are in `.pre-commit-config.yaml`.
 - `task check:fix` — auto-fix everything that supports it: `uv run ruff check --fix`,
@@ -47,6 +47,5 @@ prose and identifiers. A word earns a `cspell.json` entry only when it comes fro
 project and cannot be renamed — command names, API identifiers, file formats, proper nouns, domain
 vocabulary (e.g. `addopts`, `conftest`, `pyrefly`). In tests, never invent gibberish that needs a
 suppression — any real word works for an unknown command, a bogus flag, or filler data, so pick one
-(`banana`, not an invented pseudo-word). `# cspell:disable-line` is reserved for fixtures where the
-gibberish
-itself is the behavior under test, never a dictionary entry.
+(`banana`, not an invented pseudo-word). `# cspell:disable-line` is reserved for fixtures where
+the gibberish itself is the behavior under test, never a dictionary entry.

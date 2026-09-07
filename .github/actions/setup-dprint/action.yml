@@ -18,4 +18,4 @@ runs:
         mkdir -p "${HOME}/.dprint/bin"
         unzip -o -d "${HOME}/.dprint/bin" dprint.zip
         rm -f dprint.zip
-        printf "%s/.dprint/bin" "${HOME}" >> "${GITHUB_PATH}"
+        printf "%s/.dprint/bin\n" "${HOME}" >> "${GITHUB_PATH}"
