@@ -86,7 +86,7 @@ Add the hook to `.pre-commit-config.yaml` and run `pre-commit install` or
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/jeffzi/pymaxlines
-    rev: v0.6.0
+    rev: v0.7.0
     hooks:
       - id: check-max-lines
 ```
