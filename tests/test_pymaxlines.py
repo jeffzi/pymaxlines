@@ -1018,19 +1018,20 @@ def test_main_when_help_or_version_stdout_broken_mid_write_does_exit_zero(
 
 @pytest.mark.skipif(sys.platform == "win32", reason="os.close(1) semantics are POSIX-only")
 @pytest.mark.parametrize(
-    ("code_lines", "expected_exit"),
+    ("code_lines", "extra_args", "expected_exit"),
     [
-        pytest.param(1, 0, id="clean-run"),
-        pytest.param(MAX_LINES_SRC + 1, 1, id="over-limit"),
+        pytest.param(1, [], 0, id="clean-run"),
+        pytest.param(MAX_LINES_SRC + 1, [], 1, id="over-limit"),
+        pytest.param(1, ["--show-sizes"], 0, id="show-sizes"),
     ],
 )
 def test_main_when_stdout_fd_closed_at_startup_does_exit_cleanly(
-    tmp_path: Path, code_lines: int, expected_exit: int
+    tmp_path: Path, code_lines: int, extra_args: list[str], expected_exit: int
 ) -> None:
     file = write_code_lines(tmp_path, code_lines)
 
     result = subprocess.run(  # noqa: S603 — fixed interpreter, no shell
-        [sys.executable, "-m", "pymaxlines", str(file)],
+        [sys.executable, "-m", "pymaxlines", *extra_args, str(file)],
         capture_output=True,
         text=True,
         check=False,
@@ -1040,6 +1041,33 @@ def test_main_when_stdout_fd_closed_at_startup_does_exit_cleanly(
     assert result.returncode == expected_exit
     assert "Traceback" not in result.stderr
     assert "Exception ignored" not in result.stderr
+
+
+def test_main_when_show_sizes_and_stdout_is_text_io_wrapper_does_write_output(
+    tmp_path: Path,
+) -> None:
+    file = write_code_lines(tmp_path, 1)
+
+    result = subprocess.run(  # noqa: S603 — fixed interpreter, no shell
+        [sys.executable, "-m", "pymaxlines", "--show-sizes", str(file)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip()
+
+
+def test_main_when_show_sizes_and_stdout_is_not_text_io_wrapper_does_write_output(
+    tmp_path: Path,
+) -> None:
+    file = write_code_lines(tmp_path, 1)
+
+    exit_code, output = capture_main(["--show-sizes", str(file)])
+
+    assert exit_code == 0
+    assert output.strip()
 
 
 # ---------------------------------------------------------------------------

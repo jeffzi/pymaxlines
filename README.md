@@ -168,11 +168,11 @@ a plain count. A function row's span begins at its first decorator while its cou
 
 ```console
 $ pymaxlines --show-sizes --max-lines 20 --max-lines-per-function 5 src/app/service.py
-src/app/service.py: 21 code lines (limit 20, over by 1)
-  1-3  imports                   3
-  6-22  class RequestHandler    14
-    9-12  def __init__         3/5
-    14-22  def handle_request  8/5
+src/app/service.py: 21/20 code lines!
+  1-3    imports                 3
+  6-22   class RequestHandler   14
+  ├ 9-12   def __init__        3/5
+  └ 14-22  def handle_request  8/5!
   25-28  def validate          3/5
 ```
 

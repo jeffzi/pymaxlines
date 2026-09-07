@@ -134,8 +134,8 @@ def test_show_sizes_when_exclude_flag_given_does_exclude_matching_files(tmp_path
 @pytest.mark.parametrize(
     ("extra_args", "expected"),
     [
-        ((), "5 code lines"),
-        (("--no-skip-comments",), "7 code lines"),
+        ((), f"5/{MAX_LINES_SRC} code lines"),
+        (("--no-skip-comments",), f"7/{MAX_LINES_SRC} code lines"),
     ],
 )
 def test_show_sizes_when_skip_flags_change_does_affect_code_line_counts(
@@ -174,7 +174,7 @@ def test_show_sizes_when_parenthesized_docstring_present_does_exclude_from_count
     exit_code, output = _sizes_output(file)
 
     assert exit_code == 0
-    assert f"{expected_file_lines} code lines" in output
+    assert f"{expected_file_lines}/{MAX_LINES_SRC} code lines" in output
     lines = output.splitlines()
     foo_line = _line_with(lines, "def foo")
     assert foo_line.rstrip().endswith(f"{expected_func_count}/{MAX_LINES_PER_FUNCTION}")
@@ -209,7 +209,7 @@ def test_show_sizes_when_file_has_functions_does_list_them_with_code_line_counts
     lines = output.splitlines()
     foo_line = _line_with(lines, "def foo")
     bar_line = _line_with(lines, "def bar")
-    assert foo_line.startswith("  1-6  def foo")
+    assert foo_line.startswith("  1-6   def foo")
     assert foo_line.endswith(f"5/{MAX_LINES_PER_FUNCTION}")
     assert bar_line.startswith("  8-11  def bar")
     assert bar_line.endswith(f"3/{MAX_LINES_PER_FUNCTION}")
@@ -248,9 +248,9 @@ def test_show_sizes_when_file_has_class_does_list_class_with_children(
     other_line = _line_with(lines, "def other")
     assert class_line.startswith("  1-7  class MyClass")
     assert class_line.endswith("6")
-    assert method_line.startswith("    2-4  def method")
+    assert method_line.startswith("  ├ 2-4  def method")
     assert method_line.endswith(f"2/{MAX_LINES_PER_FUNCTION}")
-    assert other_line.startswith("    6-7  def other")
+    assert other_line.startswith("  └ 6-7  def other")
     assert other_line.endswith(f"1/{MAX_LINES_PER_FUNCTION}")
 
 
@@ -397,7 +397,7 @@ def test_show_sizes_when_nested_function_does_show_as_child(tmp_path: Path) -> N
     inner_line = _line_with(lines, "def inner")
     assert outer_line.startswith("  1-4  def outer")
     assert outer_line.endswith(f"3/{MAX_LINES_PER_FUNCTION}")
-    assert inner_line.startswith("    2-3  def inner")
+    assert inner_line.startswith("  └ 2-3  def inner")
     assert inner_line.endswith(f"1/{MAX_LINES_PER_FUNCTION}")
 
 
@@ -444,7 +444,7 @@ def test_show_sizes_when_module_level_compound_has_def_does_list_def_nested_unde
     block_line = _line_with(lines, "if TYPE_CHECKING:")
     class_line = _line_with(lines, "class Foo")
     assert block_line.startswith("  1-3")
-    assert class_line.startswith("    2-3  class Foo")
+    assert class_line.startswith("  └ 2-3  class Foo")
     assert class_line.rstrip().endswith("2")
 
 
@@ -472,9 +472,9 @@ def test_show_sizes_when_class_body_compound_has_def_does_list_def_as_child_of_c
     helper_idx = lines.index(helper_line)
     method_idx = lines.index(method_line)
     assert helper_idx < method_idx
-    assert helper_line.startswith("    3-4  def helper")
+    assert helper_line.startswith("  ├ 3-4  def helper")
     assert helper_line.rstrip().endswith(f"1/{MAX_LINES_PER_FUNCTION}")
-    assert method_line.startswith("    5-6  def method")
+    assert method_line.startswith("  └ 5-6  def method")
     assert method_line.rstrip().endswith(f"1/{MAX_LINES_PER_FUNCTION}")
 
 
@@ -524,26 +524,22 @@ def test_show_sizes_when_def_inside_compound_exceeds_limit_does_agree_with_check
 
 
 @pytest.mark.parametrize(
-    ("count", "expect_over_by"),
+    ("count", "marker"),
     [
-        pytest.param(MAX_LINES_SRC + 5, 5, id="over-limit"),
-        pytest.param(MAX_LINES_SRC, None, id="at-limit"),
+        pytest.param(MAX_LINES_SRC + 5, "!", id="over-limit"),
+        pytest.param(MAX_LINES_SRC, "", id="at-limit"),
+        pytest.param(MAX_LINES_SRC - 5, "", id="under-limit"),
     ],
 )
-def test_show_sizes_when_file_size_varies_does_show_over_by_only_when_exceeded(
-    tmp_path: Path, count: int, expect_over_by: int | None
+def test_show_sizes_when_file_size_varies_does_show_count_over_limit_with_marker(
+    tmp_path: Path, count: int, marker: str
 ) -> None:
     file = write_code_lines(tmp_path, count)
 
     exit_code, output = _sizes_output(file)
 
     assert exit_code == 0
-    assert f"{count} code lines" in output
-    assert f"limit {MAX_LINES_SRC}" in output
-    if expect_over_by is None:
-        assert "over by" not in output
-    else:
-        assert f"over by {expect_over_by}" in output
+    assert output.splitlines()[0] == f"{file}: {count}/{MAX_LINES_SRC} code lines{marker}"
 
 
 @pytest.mark.parametrize(
@@ -551,6 +547,7 @@ def test_show_sizes_when_file_size_varies_does_show_over_by_only_when_exceeded(
     [
         pytest.param((), f"10/{MAX_LINES_PER_FUNCTION}", id="limit-set"),
         pytest.param(("--max-lines-per-function", "0"), "10", id="limit-zero"),
+        pytest.param(("--max-lines-per-function", "5"), "10/5!", id="over-limit"),
     ],
 )
 def test_show_sizes_when_function_limit_varies_does_show_count_format(
@@ -572,26 +569,49 @@ def test_show_sizes_when_function_limit_varies_does_show_count_format(
 def test_show_sizes_when_entries_have_varying_widths_does_align_counts(
     tmp_path: Path,
 ) -> None:
-    source = textwrap.dedent("""\
-        import os
+    source = (
+        textwrap.dedent("""\
+            import os
 
-        x = 1
+            x = 1
 
-        def short_name():
-            a = 1
+            def short_name():
+                a = 1
 
-        def a_function_with_a_very_long_name():
-            b = 1
-    """)
+            def long_name():
+        """)
+        + INDENTED_CODE_LINE * 4
+    )
     file = write_module(tmp_path, source)
 
     exit_code, output = _sizes_output(file)
 
     assert exit_code == 0
-    entry_lines = [line for line in output.splitlines() if line.startswith("  ")]
+    lines = output.splitlines()
+    entry_lines = [line for line in lines if line.startswith("  ")]
     assert len(entry_lines) == 4
     count_positions = [len(line.rstrip()) for line in entry_lines]
     assert len(set(count_positions)) == 1
+    short_line = _line_with(lines, "def short_name")
+    long_line = _line_with(lines, "def long_name")
+    assert short_line.index("def short_name") == long_line.index("def long_name")
+
+
+def test_show_sizes_when_mixed_over_and_under_limit_does_align_counts(
+    tmp_path: Path,
+) -> None:
+    limit = 5
+    source = "def under():\n" + INDENTED_CODE_LINE * 3 + "\ndef over():\n" + INDENTED_CODE_LINE * 8
+    file = write_module(tmp_path, source)
+
+    exit_code, output = _sizes_output(file, "--max-lines-per-function", str(limit))
+
+    assert exit_code == 0
+    lines = output.splitlines()
+    entry_lines = [line for line in lines if line.startswith("  ") and "/" in line]
+    assert len(entry_lines) == 2
+    slash_positions = [line.rindex("/") for line in entry_lines]
+    assert len(set(slash_positions)) == 1
 
 
 def test_show_sizes_when_multiple_files_does_separate_with_blank_line(
@@ -616,7 +636,38 @@ def test_show_sizes_when_empty_file_does_print_only_header(tmp_path: Path) -> No
     assert exit_code == 0
     lines = output.strip().splitlines()
     assert len(lines) == 1
-    assert "0 code lines" in lines[0]
+    assert f"0/{MAX_LINES_SRC} code lines" in lines[0]
+
+
+def test_show_sizes_when_depth_two_nesting_does_use_continuation_glyphs(
+    tmp_path: Path,
+) -> None:
+    source = textwrap.dedent("""\
+        class Outer:
+            def first(self):
+                def nested():
+                    x = 1
+                y = 2
+            def second(self):
+                def inner():
+                    w = 1
+                z = 3
+    """)
+    file = write_module(tmp_path, source)
+
+    exit_code, output = _sizes_output(file)
+
+    assert exit_code == 0
+    lines = output.splitlines()
+    first_line = _line_with(lines, "def first")
+    nested_line = _line_with(lines, "def nested")
+    inner_line = _line_with(lines, "def inner")
+    second_line = _line_with(lines, "def second")
+    assert first_line.startswith("  ├ 2-5  def first")
+    assert nested_line.startswith("  │ └ 3-4  def nested")
+    assert nested_line.rstrip().endswith(f"1/{MAX_LINES_PER_FUNCTION}")
+    assert second_line.startswith("  └ 6-9  def second")
+    assert inner_line.startswith("    └ 7-8  def inner")
 
 
 def test_show_sizes_when_errors_occur_does_print_diagnostics_after_listing(

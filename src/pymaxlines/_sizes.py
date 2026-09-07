@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import io
 import sys
 from dataclasses import dataclass
 from itertools import groupby
@@ -47,6 +48,12 @@ _IMPORT_TYPES = (ast.Import, ast.ImportFrom)
 _MAX_LABEL_LEN = 40
 
 _RUN_LABELS: dict[str, str] = {"import": "imports", "code": "module-level code"}
+
+_INDENT = "  "
+_NO_TRUNK = "  "
+_TRUNK = "│ "
+_LAST_BRANCH = "└ "
+_BRANCH = "├ "
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,49 +275,71 @@ def _build_file_size(path: Path, analysis: FileAnalysis) -> FileSize:
 class _Row(NamedTuple):
     """One flattened line of a text-rendered breakdown."""
 
-    depth: int
     span: str
     label: str
     count: str
+    is_last_chain: tuple[bool, ...]
+
+
+def _gutter(row: _Row) -> str:
+    """Map ``is_last_chain`` to a gutter column per entry.
+
+    Each middle entry selects a continuation bar or blank; the root
+    (index 0) contributes no column, since depth-0 rows render no glyph;
+    the final entry is consumed by the ``└``/``├`` choice on the next line.
+    """
+    if len(row.is_last_chain) == 1:
+        return _INDENT
+    parts = [_INDENT]
+    parts.extend(_NO_TRUNK if is_last else _TRUNK for is_last in row.is_last_chain[1:-1])
+    parts.append(_LAST_BRANCH if row.is_last_chain[-1] else _BRANCH)
+    return "".join(parts)
 
 
 def _format_file(file_size: FileSize) -> str:
-    header = f"{file_size.path}: {file_size.code_lines} code lines (limit {file_size.limit}"
-    if file_size.code_lines > file_size.limit:
-        header += f", over by {file_size.code_lines - file_size.limit}"
-    header += ")"
+    marker = "!" if file_size.code_lines > file_size.limit else ""
+    header = f"{file_size.path}: {file_size.code_lines}/{file_size.limit} code lines{marker}"
 
     if not file_size.entries:
         return header
 
     rows: list[_Row] = []
-    _collect_rows(file_size.entries, 0, rows)
+    _collect_rows(file_size.entries, rows)
 
-    prefixes = [f"{'  ' * (row.depth + 1)}{row.span}  {row.label}" for row in rows]
-    count_width = max(len(row.count) for row in rows)
+    span_width = max(len(row.span) for row in rows)
+    prefixes = [f"{_gutter(row)}{row.span:<{span_width}}  {row.label}" for row in rows]
+    count_width = max(len(row.count.removesuffix("!")) for row in rows)
     prefix_width = max(len(p) for p in prefixes)
 
     lines = [header]
     for prefix, row in zip(prefixes, rows, strict=True):
-        lines.append(f"{prefix:<{prefix_width}}  {row.count:>{count_width}}")
+        if row.count.endswith("!"):
+            base = row.count.removesuffix("!")
+            lines.append(f"{prefix:<{prefix_width}}  {base:>{count_width}}!")
+        else:
+            lines.append(f"{prefix:<{prefix_width}}  {row.count:>{count_width}}")
 
     return "\n".join(lines)
 
 
 def _collect_rows(
     entries: tuple[SizeEntry, ...],
-    depth: int,
     rows: list[_Row],
+    is_last_chain: tuple[bool, ...] = (),
 ) -> None:
-    for entry in entries:
+    last_idx = len(entries) - 1
+    for idx, entry in enumerate(entries):
         span = f"{entry.start}-{entry.end}"
         if entry.limit is not None:
-            count_str = f"{entry.code_lines}/{entry.limit}"
+            marker = "!" if entry.code_lines > entry.limit else ""
+            count_str = f"{entry.code_lines}/{entry.limit}{marker}"
         else:
             count_str = str(entry.code_lines)
-        rows.append(_Row(depth, span, entry.label, count_str))
+        is_last = idx == last_idx
+        child_chain = (*is_last_chain, is_last)
+        rows.append(_Row(span, entry.label, count_str, child_chain))
         if entry.children:
-            _collect_rows(entry.children, depth + 1, rows)
+            _collect_rows(entry.children, rows, child_chain)
 
 
 def _collect_file_sizes(
@@ -356,7 +385,14 @@ def run_sizes(
 
     output_parts = [_format_file(fs) for fs in file_sizes]
 
-    if output_parts:
-        sys.stdout.write("\n\n".join(output_parts) + "\n")
+    if output_parts and sys.stdout is not None:
+        if isinstance(sys.stdout, io.TextIOWrapper):
+            sys.stdout.reconfigure(encoding="utf-8")
+        # Write each file separately so a broken pipe raises on the next
+        # write rather than being silently swallowed by a single large call.
+        last = len(output_parts) - 1
+        for idx, part in enumerate(output_parts):
+            sys.stdout.write(part)
+            sys.stdout.write("\n" if idx == last else "\n\n")
 
     return _finish(sum(report(msg) for msg in error_messages))
