@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from pymaxlines._lines import is_docstring_stmt
+from pymaxlines._lines import _node_end, is_docstring_stmt
 
 if TYPE_CHECKING:
     import ast
@@ -14,30 +14,13 @@ if TYPE_CHECKING:
 
     from pymaxlines._lines import TokenScan
 
-
-@dataclass(frozen=True, slots=True)
-class RuleEffect:
-    """What a rule disables and where its directive is allowed to apply."""
-
-    disables_file_check: bool
-    disables_function_check: bool
-
-
 MAX_LINES_RULE = "max-lines"
 MAX_LINES_PER_FUNCTION_RULE = "max-lines-per-function"
+UNUSED_DISABLE_DIRECTIVE_RULE = "unused-disable-directive"
 
-RULE_REGISTRY: dict[str, RuleEffect] = {
-    MAX_LINES_RULE: RuleEffect(disables_file_check=True, disables_function_check=False),
-    MAX_LINES_PER_FUNCTION_RULE: RuleEffect(
-        disables_file_check=False, disables_function_check=True
-    ),
-}
-
-KNOWN_RULES = frozenset(RULE_REGISTRY)
-RULES_DISABLING_FILE = frozenset(r for r, e in RULE_REGISTRY.items() if e.disables_file_check)
-RULES_DISABLING_FUNCTIONS = frozenset(
-    r for r, e in RULE_REGISTRY.items() if e.disables_function_check
-)
+RULES_DISABLING_FILE = frozenset({MAX_LINES_RULE})
+RULES_DISABLING_FUNCTIONS = frozenset({MAX_LINES_PER_FUNCTION_RULE})
+KNOWN_RULES = RULES_DISABLING_FILE | RULES_DISABLING_FUNCTIONS
 
 PYMAXLINES_RE = re.compile(r"pymaxlines\s*:\s*(.*)")
 PYMAXLINES_ATTEMPT_RE = re.compile(r"pymaxlines(?!\w)", re.IGNORECASE)
@@ -129,7 +112,7 @@ def find_pymaxlines_segment(comment_text: str, path: Path, lineno: int) -> str |
 
 def first_statement_line(
     tree: ast.Module,
-    decorator_at_lines: frozenset[int] = frozenset(),
+    decorator_at_lines: frozenset[int],
 ) -> int | None:
     r"""Return the line of the module's first real statement, skipping a module docstring.
 
@@ -144,7 +127,7 @@ def first_statement_line(
     """
     body = tree.body
     if body and is_docstring_stmt(body[0]):
-        docstring_end = body[0].end_lineno or body[0].lineno
+        docstring_end = _node_end(body[0])
         body = body[1:]
     else:
         docstring_end = 0

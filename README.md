@@ -48,9 +48,9 @@ applies one limit per file and one per function, with separate thresholds for te
 ## Quick example
 
 ```console
-$ pymaxlines src/app/service.py
-src/app/service.py:1: Too many lines in module (412 > 400) [max-lines]
-src/app/service.py:52: Too many lines in function 'handle_request' (73 > 60, lines 52-161) [max-lines-per-function]
+$ pymaxlines --max-lines 20 --max-lines-per-function 5 src/app/service.py
+src/app/service.py:1: Too many lines in module (21 > 20) [max-lines]
+src/app/service.py:14: Too many lines in function 'handle_request' (8 > 5, lines 14-22) [max-lines-per-function]
 Found 2 errors.
 ```
 
@@ -92,7 +92,9 @@ repos:
 ```
 
 The shipped hook passes `--force-exclude`, so `exclude` patterns from `[tool.pymaxlines]` apply
-automatically. Add `args: [--no-force-exclude]` to skip them.
+automatically. `--force-exclude` matches explicit paths by directory component and ancestor prefix,
+so bare directory names work while path globs may not. Add `args: [--no-force-exclude]` to skip
+them.
 
 [prek]: https://github.com/j178/prek
 
@@ -151,25 +153,27 @@ The `--skip-*`, `--report-unused-disable-directives`, and `--force-exclude` flag
 | Code | Meaning                                                                                                                                  |
 | ---- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | 0    | No findings (empty discovery prints a warning and still exits 0)                                                                         |
-| 1    | One or more findings, an invalid `# pymaxlines:` directive, or a file that could not be read or parsed                                   |
+| 1    | One or more findings, an invalid `# pymaxlines:` directive, a file that could not be read or parsed, or a broken stdout pipe             |
 | 2    | Invalid usage, negative limit, or config-file error (unknown key, wrong type, unparsable file, or a `--config` path that does not exist) |
 
 ### Size breakdown
 
 `--show-sizes` prints a code-line breakdown of every file instead of checking limits, largest first.
 Counts respect `--skip-*` settings, so they match what the check enforces. The run exits 0 even when
-files exceed their limits; only unreadable files, parse failures, and directive errors produce
-exit 1.
+files exceed their limits; only unreadable files, parse failures, directive errors, and a broken
+stdout pipe produce exit 1.
 
-Function rows show `count/limit`; other rows show a plain count.
+Function rows show `count/limit` when the applicable per-function limit is non-zero; other rows show
+a plain count. A function row's span begins at its first decorator while its count starts at `def`.
 
 ```console
-$ pymaxlines --show-sizes src/app/service.py
-src/app/service.py: 412 code lines (limit 400, over by 12)
-  1-3  imports                       3
-  12-180  class RequestHandler     142
-    52-161  def handle_request   73/60
-  182-220  def validate          38/60
+$ pymaxlines --show-sizes --max-lines 20 --max-lines-per-function 5 src/app/service.py
+src/app/service.py: 21 code lines (limit 20, over by 1)
+  1-3  imports                   3
+  6-22  class RequestHandler    14
+    9-12  def __init__         3/5
+    14-22  def handle_request  8/5
+  25-28  def validate          3/5
 ```
 
 ## Configuration
@@ -209,8 +213,9 @@ import re
 
 ### Function-level
 
-Trail the directive on any line of the `def` header, from `def` through the colon. A decorator line
-sits above the header and does not count — a directive there is reported as misplaced:
+The directive must share a line with part of the `def` signature, from `def` through the closing
+colon. A comment-only line inside the parentheses is misplaced, and a decorator line sits above the
+header — a directive on either is reported as misplaced:
 
 ```python
 def big_handler(
@@ -251,8 +256,9 @@ Turning a `--skip-*` flag off makes that category count toward both file and fun
 
 Install [Task](https://taskfile.dev), [uv](https://docs.astral.sh/uv/), and
 [dprint](https://dprint.dev/install/), then run `task install` to sync dependencies and install
-the git hooks. `task --list` shows the full development workflow. `task check` runs every hook;
-`task test:matrix` runs the suite on each supported Python version.
+the git hooks. `task --list` shows the full development workflow. `task check` runs the
+pre-commit-stage hooks; `task test` runs the pytest suite; `task test:matrix` runs it on each
+supported Python version.
 
 ## License
 

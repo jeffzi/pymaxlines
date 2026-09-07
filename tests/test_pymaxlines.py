@@ -75,14 +75,25 @@ def test_main_when_path_marks_a_test_file_does_apply_the_test_limit(
     assert exit_code == 0
 
 
-def test_main_when_file_outside_cwd_has_tests_ancestor_does_use_source_limit(
+def test_main_when_double_dot_prefixed_dir_contains_tests_subdir_does_apply_test_limit(
     tmp_path: Path,
 ) -> None:
-    # cwd is tmp_path (via _isolate_cwd).  Place the file under a sibling
-    # directory whose path includes a ``tests`` component so the relative path
-    # from cwd starts with ``../`` and contains ``tests``.
-    sibling = tmp_path.parent / "tests" / "project"
-    sibling.mkdir(parents=True, exist_ok=True)
+    file = write_code_lines(tmp_path, MAX_LINES_SRC + 1, "..data/tests/helpers.py")
+
+    exit_code = main([str(file)])
+
+    assert exit_code == 0
+
+
+def test_main_when_file_outside_cwd_has_tests_ancestor_does_use_source_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Sandbox cwd inside tmp_path so the sibling stays under tmp_path too.
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    sibling = tmp_path / "tests" / "project"
+    sibling.mkdir(parents=True)
     file = sibling / "module.py"
     file.write_text(CODE_LINE * (MAX_LINES_SRC + 1))
 
@@ -136,6 +147,73 @@ def test_main_when_non_code_content_present_does_not_count_it(tmp_path: Path, co
     exit_code = main([str(file)])
 
     assert exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(
+            '("Module docstring.")\n' + CODE_LINE * MAX_LINES_SRC,
+            id="module-paren-single-line",
+        ),
+        pytest.param(
+            '(\n"Module"\n"docstring."\n)\n' + CODE_LINE * MAX_LINES_SRC,
+            id="module-paren-multi-line",
+        ),
+        pytest.param(
+            'class C:\n    ("Class docstring.")\n' + INDENTED_CODE_LINE * (MAX_LINES_SRC - 1),
+            id="class-paren-single-line",
+        ),
+        pytest.param(
+            'class C:\n    (\n    "Class"\n    "docstring."\n    )\n'
+            + INDENTED_CODE_LINE * (MAX_LINES_SRC - 1),
+            id="class-paren-multi-line",
+        ),
+        pytest.param(
+            'def f():\n    ("Function docstring.")\n' + INDENTED_CODE_LINE * MAX_LINES_PER_FUNCTION,
+            id="function-paren-single-line",
+        ),
+        pytest.param(
+            'def f():\n    (\n    "Function"\n    "docstring."\n    )\n'
+            + INDENTED_CODE_LINE * MAX_LINES_PER_FUNCTION,
+            id="function-paren-multi-line",
+        ),
+    ],
+)
+def test_main_when_parenthesized_docstring_present_does_not_count_it(
+    tmp_path: Path, content: str
+) -> None:
+    file = write_module(tmp_path, content)
+
+    exit_code = main([str(file)])
+
+    assert exit_code == 0
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_count"),
+    [
+        pytest.param(
+            '("Module docstring.")\n' + CODE_LINE * MAX_LINES_SRC,
+            MAX_LINES_SRC + 1,
+            id="module-paren-docstring",
+        ),
+        pytest.param(
+            '(\n"Module"\n"docstring."\n)\n' + CODE_LINE * MAX_LINES_SRC,
+            MAX_LINES_SRC + 4,
+            id="module-paren-multi-line-docstring",
+        ),
+    ],
+)
+def test_main_when_no_skip_docstrings_and_parenthesized_docstring_does_count_all_lines(
+    tmp_path: Path, content: str, expected_count: int
+) -> None:
+    file = write_module(tmp_path, content)
+
+    exit_code, lines = run_check(file, "--no-skip-docstrings")
+
+    assert exit_code == 1
+    assert lines == [file_diagnostic(expected_count)]
 
 
 @pytest.mark.parametrize(
@@ -389,6 +467,16 @@ def test_main_when_nested_and_later_functions_oversized_does_report_in_line_orde
             + INDENTED_CODE_LINE * (MAX_LINES_PER_FUNCTION - 1),
             id="function-docstring",
         ),
+        pytest.param(
+            'def big():\n    ("Function docstring.")\n'
+            + INDENTED_CODE_LINE * MAX_LINES_PER_FUNCTION,
+            id="function-paren-docstring",
+        ),
+        pytest.param(
+            'def big():\n    (\n    "Function"\n    "docstring."\n    )\n'
+            + INDENTED_CODE_LINE * MAX_LINES_PER_FUNCTION,
+            id="function-paren-multi-line-docstring",
+        ),
     ],
 )
 def test_main_when_function_has_non_code_content_does_not_count_it(
@@ -419,7 +507,9 @@ def test_oversized_functions_when_body_code_shares_signature_line_does_set_corre
     # `count > limit` distinguish the two cases.
     tree = ast.parse(source)
     scan = scan_tokens(source)
-    code_lines = code_line_numbers(source, tree, scan, skip_blank_lines=True, skip_docstrings=True)
+    code_lines = code_line_numbers(
+        source, tree, scan, skip_blank_lines=True, skip_comments=True, skip_docstrings=True
+    )
 
     result = oversized_functions(tree, code_lines, limit=0, header_ranges=scan.header_ranges)
 
@@ -731,12 +821,10 @@ def test_main_when_version_flag_given_does_print_version_and_exit_zero(
 )
 def test_main_when_cwd_config_is_broken_and_help_or_version_given_does_exit_zero(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     flag: str,
     config_content: str,
 ) -> None:
     (tmp_path / "pyproject.toml").write_text(config_content)
-    monkeypatch.chdir(tmp_path)
 
     with pytest.raises(SystemExit) as exc_info:
         main([flag])
@@ -770,6 +858,11 @@ def test_main_when_no_report_unused_flag_given_does_suppress_unused_warnings(
 # ---------------------------------------------------------------------------
 
 
+def _broken_write(_text: str) -> int:
+    msg = "Broken pipe"
+    raise BrokenPipeError(msg)
+
+
 @pytest.mark.parametrize(
     "cmd_prefix",
     [
@@ -787,13 +880,17 @@ def test_main_when_no_report_unused_flag_given_does_suppress_unused_warnings(
 def test_main_when_stdout_closed_mid_run_does_exit_one_without_traceback(
     tmp_path: Path, cmd_prefix: list[str], extra_env: dict[str, str]
 ) -> None:
-    # Enough oversized files that the output exceeds the pipe buffer
-    # (64 KB on Linux, 16 KB on macOS) even when block-buffered.
-    files = [str(write_code_lines(tmp_path, MAX_LINES_SRC + 1, f"f{i:03d}.py")) for i in range(200)]
+    # --show-sizes exits 0 on a clean run, so returncode == 1 proves the
+    # broken-pipe handler fired.  run_sizes joins all listings into one
+    # write, so the total payload must exceed the OS pipe buffer (64 KB
+    # Linux, variable on macOS) in a single call.  200 files x 20
+    # functions each produce ~111 KB of listing.
+    function_source = "".join(f"def f{j}():\n    x = 1\n" for j in range(20))
+    files = [str(write_module(tmp_path, function_source, f"f{i:03d}.py")) for i in range(200)]
     env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"} | extra_env
 
     with subprocess.Popen(  # noqa: S603 — fixed commands, no shell
-        [*cmd_prefix, *files],
+        [*cmd_prefix, "--show-sizes", *files],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -817,11 +914,6 @@ def test_main_when_stdout_write_raises_broken_pipe_does_return_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     file = write_code_lines(tmp_path, MAX_LINES_SRC + 1)
-
-    def _broken_write(_text: str) -> int:
-        msg = "Broken pipe"
-        raise BrokenPipeError(msg)
-
     monkeypatch.setattr(sys.stdout, "write", _broken_write)
 
     exit_code = main([str(file)])
@@ -840,12 +932,6 @@ def test_main_when_stdout_pipe_breaks_during_walk_error_does_return_one(
     forbidden.mkdir(parents=True)
     write_code_lines(tmp_path, 1, "pkg/ok.py")
     forbidden.chmod(0o000)
-    monkeypatch.chdir(tmp_path)
-
-    def _broken_write(_text: str) -> int:
-        msg = "Broken pipe"
-        raise BrokenPipeError(msg)
-
     monkeypatch.setattr(sys.stdout, "write", _broken_write)
 
     try:
@@ -890,3 +976,87 @@ def test_main_when_diagnostics_emitted_does_print_matching_summary_line(
 
     assert exit_code == 1
     assert output.strip().splitlines()[-1] == expected_summary
+
+
+# ---------------------------------------------------------------------------
+# broken pipe on --help / --version
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="pipe semantics are POSIX-only")
+@pytest.mark.parametrize(
+    "flag",
+    [
+        pytest.param("--help", id="help"),
+        pytest.param("--version", id="version"),
+    ],
+)
+def test_main_when_help_or_version_stdout_broken_mid_write_does_exit_zero(
+    flag: str,
+) -> None:
+    with subprocess.Popen(  # noqa: S603 — fixed commands, no shell
+        [sys.executable, "-m", "pymaxlines", flag],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ) as proc:
+        assert proc.stdout is not None
+        proc.stdout.close()
+        proc.stdout = None
+        _, stderr = proc.communicate(timeout=30)
+
+    assert proc.returncode == 0
+    assert "Exception ignored" not in stderr
+    assert "BrokenPipeError" not in stderr
+    assert "Traceback" not in stderr
+
+
+# ---------------------------------------------------------------------------
+# closed stdout (fd 1 closed at startup)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="os.close(1) semantics are POSIX-only")
+@pytest.mark.parametrize(
+    ("code_lines", "expected_exit"),
+    [
+        pytest.param(1, 0, id="clean-run"),
+        pytest.param(MAX_LINES_SRC + 1, 1, id="over-limit"),
+    ],
+)
+def test_main_when_stdout_fd_closed_at_startup_does_exit_cleanly(
+    tmp_path: Path, code_lines: int, expected_exit: int
+) -> None:
+    file = write_code_lines(tmp_path, code_lines)
+
+    result = subprocess.run(  # noqa: S603 — fixed interpreter, no shell
+        [sys.executable, "-m", "pymaxlines", str(file)],
+        capture_output=True,
+        text=True,
+        check=False,
+        preexec_fn=lambda: os.close(1),
+    )
+
+    assert result.returncode == expected_exit
+    assert "Traceback" not in result.stderr
+    assert "Exception ignored" not in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# --help default for --report-unused-disable-directives
+# ---------------------------------------------------------------------------
+
+
+def test_main_when_help_printed_does_show_false_default_for_report_unused(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit):
+        main(["--help"])
+
+    help_text = capsys.readouterr().out
+
+    options_section = help_text.split("options:")[1]
+    report_pos = options_section.index("--report-unused-disable-directives")
+    force_pos = options_section.index("--force-exclude")
+    flag_help = options_section[report_pos:force_pos]
+    assert "(default: False)" in flag_help

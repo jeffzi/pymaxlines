@@ -39,7 +39,7 @@ BOOL_SPECS: tuple[tuple[str, bool, str], ...] = (
     (
         "report-unused-disable-directives",
         False,
-        "report pymaxlines-disable directives that suppress no findings",
+        "report pymaxlines-disable directives that suppress no findings (default: %(default)s)",
     ),
     (
         "force-exclude",

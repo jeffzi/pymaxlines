@@ -10,6 +10,7 @@ from conftest import (
     CODE_LINE,
     INDENTED_CODE_LINE,
     capture_main,
+    run_check,
     write_code_lines,
     write_module,
 )
@@ -21,13 +22,11 @@ if TYPE_CHECKING:
 
 
 def _sizes_output(file: Path, *extra_args: str) -> tuple[int, str]:
-    """Run main with --show-sizes and return (exit_code, stdout)."""
     return capture_main(["--show-sizes", *extra_args, str(file)])
 
 
-def _big_function_with_block(total_body_lines: int) -> str:
-    """Return def big(): source with total_body_lines code lines, including one if-block."""
-    return "def big():\n    if True:\n        pass\n" + INDENTED_CODE_LINE * (total_body_lines - 2)
+def _line_with(lines: list[str], substring: str) -> str:
+    return next(line for line in lines if substring in line)
 
 
 # ---------------------------------------------------------------------------
@@ -58,9 +57,8 @@ def test_show_sizes_when_help_flag_given_does_describe_show_sizes(
 
 
 def test_show_sizes_when_empty_discovery_does_warn_and_exit_zero(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.chdir(tmp_path)
 
     exit_code = main(["--show-sizes"])
 
@@ -122,12 +120,9 @@ def test_show_sizes_when_directive_has_error_does_report_after_listing_and_exit_
     assert "Found 1 error." in output
 
 
-def test_show_sizes_when_exclude_flag_given_does_exclude_matching_files(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_show_sizes_when_exclude_flag_given_does_exclude_matching_files(tmp_path: Path) -> None:
     write_code_lines(tmp_path, 10, "src/module.py")
     write_code_lines(tmp_path, 10, "generated/auto.py")
-    monkeypatch.chdir(tmp_path)
 
     exit_code, output = capture_main(["--show-sizes", "--exclude", "generated", "."])
 
@@ -152,6 +147,37 @@ def test_show_sizes_when_skip_flags_change_does_affect_code_line_counts(
     _exit_code, output = _sizes_output(file, *extra_args)
 
     assert expected in output
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_file_lines", "expected_func_count"),
+    [
+        pytest.param(
+            'def foo():\n    ("Function docstring.")\n' + INDENTED_CODE_LINE * 5,
+            6,
+            5,
+            id="paren-single-line",
+        ),
+        pytest.param(
+            'def foo():\n    (\n    "Function"\n    "docstring."\n    )\n' + INDENTED_CODE_LINE * 5,
+            6,
+            5,
+            id="paren-multi-line",
+        ),
+    ],
+)
+def test_show_sizes_when_parenthesized_docstring_present_does_exclude_from_counts(
+    tmp_path: Path, source: str, expected_file_lines: int, expected_func_count: int
+) -> None:
+    file = write_module(tmp_path, source)
+
+    exit_code, output = _sizes_output(file)
+
+    assert exit_code == 0
+    assert f"{expected_file_lines} code lines" in output
+    lines = output.splitlines()
+    foo_line = _line_with(lines, "def foo")
+    assert foo_line.rstrip().endswith(f"{expected_func_count}/{MAX_LINES_PER_FUNCTION}")
 
 
 def test_show_sizes_when_unused_disable_directive_does_not_report_it(
@@ -181,8 +207,8 @@ def test_show_sizes_when_file_has_functions_does_list_them_with_code_line_counts
 
     assert exit_code == 0
     lines = output.splitlines()
-    foo_line = next(line for line in lines if "def foo" in line)
-    bar_line = next(line for line in lines if "def bar" in line)
+    foo_line = _line_with(lines, "def foo")
+    bar_line = _line_with(lines, "def bar")
     assert foo_line.startswith("  1-6  def foo")
     assert foo_line.endswith(f"5/{MAX_LINES_PER_FUNCTION}")
     assert bar_line.startswith("  8-11  def bar")
@@ -217,9 +243,9 @@ def test_show_sizes_when_file_has_class_does_list_class_with_children(
 
     assert exit_code == 0
     lines = output.splitlines()
-    class_line = next(line for line in lines if "class MyClass" in line)
-    method_line = next(line for line in lines if "def method" in line)
-    other_line = next(line for line in lines if "def other" in line)
+    class_line = _line_with(lines, "class MyClass")
+    method_line = _line_with(lines, "def method")
+    other_line = _line_with(lines, "def other")
     assert class_line.startswith("  1-7  class MyClass")
     assert class_line.endswith("6")
     assert method_line.startswith("    2-4  def method")
@@ -238,7 +264,7 @@ def test_show_sizes_when_file_has_imports_does_group_consecutive_imports(
 
     assert exit_code == 0
     lines = output.splitlines()
-    imports_line = next(line for line in lines if "imports" in line)
+    imports_line = _line_with(lines, "imports")
     assert imports_line.startswith("  1-3  imports")
     assert imports_line.endswith("3")
 
@@ -253,7 +279,7 @@ def test_show_sizes_when_file_has_module_level_code_does_group_it(
 
     assert exit_code == 0
     lines = output.splitlines()
-    code_line = next(line for line in lines if "module-level code" in line)
+    code_line = _line_with(lines, "module-level code")
     assert code_line.startswith("  1-3  module-level code")
     assert code_line.endswith("3")
 
@@ -306,7 +332,9 @@ def test_show_sizes_when_files_have_same_code_lines_does_order_by_path_ascending
 def test_show_sizes_when_function_has_block_does_list_blocks_only_when_over_limit(
     tmp_path: Path, total_body_lines: int, extra_args: tuple[str, ...], expect_block: bool
 ) -> None:
-    source = _big_function_with_block(total_body_lines)
+    source = "def big():\n    if True:\n        pass\n" + INDENTED_CODE_LINE * (
+        total_body_lines - 2
+    )
     file = write_module(tmp_path, source)
 
     exit_code, output = _sizes_output(file, *extra_args)
@@ -333,7 +361,7 @@ def test_show_sizes_when_class_has_decorator_does_span_from_decorator(
 
     assert exit_code == 0
     lines = output.splitlines()
-    class_line = next(line for line in lines if "class Point" in line)
+    class_line = _line_with(lines, "class Point")
     assert class_line.startswith("  3-6  class Point")
     assert class_line.endswith("4")
 
@@ -365,8 +393,8 @@ def test_show_sizes_when_nested_function_does_show_as_child(tmp_path: Path) -> N
 
     assert exit_code == 0
     lines = output.splitlines()
-    outer_line = next(line for line in lines if "def outer" in line)
-    inner_line = next(line for line in lines if "def inner" in line)
+    outer_line = _line_with(lines, "def outer")
+    inner_line = _line_with(lines, "def inner")
     assert outer_line.startswith("  1-4  def outer")
     assert outer_line.endswith(f"3/{MAX_LINES_PER_FUNCTION}")
     assert inner_line.startswith("    2-3  def inner")
@@ -392,6 +420,102 @@ def test_show_sizes_when_block_label_is_long_does_truncate_to_40_chars(
     assert len(block_lines) == 1
     expected_label = "if " + "x" * 37
     assert f"{expected_label}…" in block_lines[0]
+
+
+# ---------------------------------------------------------------------------
+# Group B2: Compound-statement children
+# ---------------------------------------------------------------------------
+
+
+def test_show_sizes_when_module_level_compound_has_def_does_list_def_nested_under_block(
+    tmp_path: Path,
+) -> None:
+    source = textwrap.dedent("""\
+        if TYPE_CHECKING:
+            class Foo:
+                x: int = 0
+    """)
+    file = write_module(tmp_path, source)
+
+    exit_code, output = _sizes_output(file)
+
+    assert exit_code == 0
+    lines = output.splitlines()
+    block_line = _line_with(lines, "if TYPE_CHECKING:")
+    class_line = _line_with(lines, "class Foo")
+    assert block_line.startswith("  1-3")
+    assert class_line.startswith("    2-3  class Foo")
+    assert class_line.rstrip().endswith("2")
+
+
+def test_show_sizes_when_class_body_compound_has_def_does_list_def_as_child_of_class(
+    tmp_path: Path,
+) -> None:
+    source = textwrap.dedent("""\
+        class C:
+            if True:
+                def helper(self):
+                    x = 1
+            def method(self):
+                y = 2
+    """)
+    file = write_module(tmp_path, source)
+
+    exit_code, output = _sizes_output(file)
+
+    assert exit_code == 0
+    lines = output.splitlines()
+    class_line = _line_with(lines, "class C")
+    helper_line = _line_with(lines, "def helper")
+    method_line = _line_with(lines, "def method")
+    assert class_line.startswith("  1-6  class C")
+    helper_idx = lines.index(helper_line)
+    method_idx = lines.index(method_line)
+    assert helper_idx < method_idx
+    assert helper_line.startswith("    3-4  def helper")
+    assert helper_line.rstrip().endswith(f"1/{MAX_LINES_PER_FUNCTION}")
+    assert method_line.startswith("    5-6  def method")
+    assert method_line.rstrip().endswith(f"1/{MAX_LINES_PER_FUNCTION}")
+
+
+def test_show_sizes_when_over_limit_function_has_def_in_block_does_list_def_under_block(
+    tmp_path: Path,
+) -> None:
+    padding = INDENTED_CODE_LINE * MAX_LINES_PER_FUNCTION
+    source = "def big():\n    if True:\n        def inner():\n            z = 1\n" + padding
+    file = write_module(tmp_path, source)
+
+    exit_code, output = _sizes_output(file)
+
+    assert exit_code == 0
+    lines = output.splitlines()
+    block_line = _line_with(lines, "if True:")
+    inner_line = _line_with(lines, "def inner")
+    block_idx = lines.index(block_line)
+    inner_idx = lines.index(inner_line)
+    assert inner_idx == block_idx + 1
+    assert inner_line.rstrip().endswith(f"1/{MAX_LINES_PER_FUNCTION}")
+
+
+def test_show_sizes_when_def_inside_compound_exceeds_limit_does_agree_with_check(
+    tmp_path: Path,
+) -> None:
+    body = MAX_LINES_PER_FUNCTION + 1
+    indented_body = "".join(f"        x{i} = {i}\n" for i in range(body))
+    source = "if True:\n    def guarded():\n" + indented_body
+    file = write_module(tmp_path, source)
+
+    check_exit, check_lines = run_check(file)
+    assert check_exit == 1
+    assert any("guarded" in line for line in check_lines)
+    check_count = int(_line_with(check_lines, "guarded").split("(")[1].split(">")[0].strip())
+
+    sizes_exit, sizes_output = _sizes_output(file)
+    assert sizes_exit == 0
+    output_lines = sizes_output.splitlines()
+    guarded_line = _line_with(output_lines, "def guarded")
+    sizes_count = int(guarded_line.rstrip().split("/")[0].rsplit(None, 1)[-1])
+    assert sizes_count == check_count
 
 
 # ---------------------------------------------------------------------------

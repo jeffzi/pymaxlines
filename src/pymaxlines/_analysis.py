@@ -11,13 +11,14 @@ import ast
 import os
 import sys
 import tokenize
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pymaxlines._directives import DirectiveResult, diagnostic, parse_directives
 from pymaxlines._lines import (
     OversizedFunction,
+    _split_source_lines,
     code_line_numbers,
     oversized_functions,
     scan_tokens,
@@ -59,11 +60,6 @@ class FileAnalysis:
     source_lines: tuple[str, ...]
 
 
-def _file_diagnostic(path: Path, message: str) -> str:
-    """Format a file-level diagnostic: ``path:1: message``."""
-    return diagnostic(path, 1, message)
-
-
 def is_test_file(path: Path) -> bool:
     """Classify *path* as a test file.
 
@@ -80,20 +76,26 @@ def is_test_file(path: Path) -> bool:
         rel = Path(os.path.relpath(path, Path.cwd()))
     except ValueError:
         rel = None
-    if rel is not None and not rel.parts[0].startswith("..") and "tests" in rel.parts:
+    if rel is not None and rel.parts[0] != ".." and "tests" in rel.parts:
         return True
     return path.name.startswith("test_") or path.name.endswith("_test.py")
 
 
 def report(message: str) -> int:
     """Write *message* to stdout and return 1, the diagnostic count it contributes."""
-    sys.stdout.write(f"{message}\n")
+    if sys.stdout is not None:
+        sys.stdout.write(f"{message}\n")
     return 1
 
 
 def _analysis_error(path: Path, verb: str, exc: Exception) -> str:
     """Format the "could not {verb}" diagnostic message for *path*."""
-    return _file_diagnostic(path, f"could not {verb} ({exc})")
+    return diagnostic(path, 1, f"could not {verb} ({exc})")
+
+
+def _walk_error(exc: OSError) -> str:
+    """Format a directory-walk ``OSError`` as a diagnostic message."""
+    return _analysis_error(Path(exc.filename), "read", exc)
 
 
 def analyze_file(path: Path, config: Config) -> FileAnalysis | str:
@@ -121,12 +123,12 @@ def analyze_file(path: Path, config: Config) -> FileAnalysis | str:
         return _analysis_error(path, "parse", exc)
 
     directives = parse_directives(scan, tree, path)
-    effective_scan = scan if config.skip_comments else replace(scan, comment_only_lines=frozenset())
     code_lines = code_line_numbers(
         source,
         tree,
-        effective_scan,
+        scan,
         skip_blank_lines=config.skip_blank_lines,
+        skip_comments=config.skip_comments,
         skip_docstrings=config.skip_docstrings,
     )
     oversized: list[OversizedFunction] = []
@@ -146,14 +148,15 @@ def analyze_file(path: Path, config: Config) -> FileAnalysis | str:
         file_limit=file_limit,
         function_limit=function_limit,
         header_ranges=scan.header_ranges,
-        source_lines=tuple(source.split("\n")),
+        source_lines=tuple(_split_source_lines(source)),
     )
 
 
 def _finish(total: int) -> int:
     """Write the "Found N errors." summary, flush stdout, and return the exit code."""
-    if total > 0:
-        noun = "error" if total == 1 else "errors"
-        sys.stdout.write(f"Found {total} {noun}.\n")
-    sys.stdout.flush()
+    if sys.stdout is not None:
+        if total > 0:
+            noun = "error" if total == 1 else "errors"
+            sys.stdout.write(f"Found {total} {noun}.\n")
+        sys.stdout.flush()
     return 1 if total > 0 else 0

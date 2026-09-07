@@ -13,8 +13,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Breaking:** Function diagnostics now include the function's line range in the parenthetical, so
-  output parsers must be updated.
+- **Breaking:** Function diagnostics now include the function's line range, so output parsers must
+  be updated.
+
+### Fixed
+
+- Files under a directory whose name starts with `..` are again classified as test files.
+- Exclude globs no longer match ancestor directories above the project when checking an absolute
+  path.
+- Directory walks skip symlinked directories and report each walk error only once.
+- `--help` and `--version` exit 0 when piped to a command that closes the pipe.
+- `--skip-docstrings` now correctly excludes parenthesized docstrings from code-line counts.
 
 ## [0.6.0] - 2026-09-05
 
@@ -41,7 +50,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   recursively, and directory arguments are walked the same way.
 - `exclude` config key and `--exclude GLOB` flag to skip files or directories by glob pattern.
 - `--force-exclude` flag and `force-exclude` config key to apply exclude globs to files passed
-  explicitly on the command line.
+  explicitly on the command line. Matching uses directory components and ancestor prefixes, so bare
+  directory names work while path globs may not.
 
 ### Changed
 

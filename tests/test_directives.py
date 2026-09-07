@@ -872,7 +872,7 @@ def test_main_when_decorated_first_stmt_has_comment_directive_does_apply_decorat
 
 
 # ---------------------------------------------------------------------------
-# near-miss segment after (or before) a valid directive on the same line
+# near-miss or duplicate pymaxlines segment on the same line
 # ---------------------------------------------------------------------------
 
 _DUPLICATE_MSG = (
@@ -882,50 +882,32 @@ _DUPLICATE_MSG = (
 
 
 @pytest.mark.parametrize(
-    "line",
+    ("line", "expected_msg"),
     [
         pytest.param(
             "# pymaxlines: disable  # pymaxlines-disable\n",
+            _MALFORMED_MSG,
             id="valid-then-near-miss",
         ),
         pytest.param(
             "# pymaxlines-disable  # pymaxlines: disable\n",
+            _MALFORMED_MSG,
             id="near-miss-then-valid",
         ),
-    ],
-)
-def test_main_when_valid_and_near_miss_on_same_line_does_report_malformed(
-    tmp_path: Path, line: str
-) -> None:
-    content = line + CODE_LINE * 5
-    file = write_module(tmp_path, content)
-
-    exit_code, lines = run_check(file)
-
-    assert exit_code == 1
-    assert lines == [diagnostic(1, _MALFORMED_MSG)]
-
-
-# ---------------------------------------------------------------------------
-# two pymaxlines: directives on the same line
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "line",
-    [
         pytest.param(
             "# pymaxlines: disable=max-lines  # pymaxlines: disable=max-lines-per-function\n",
+            _DUPLICATE_MSG,
             id="two-different-rules",
         ),
         pytest.param(
             "# pymaxlines: disable  # pymaxlines: disable=max-lines\n",
+            _DUPLICATE_MSG,
             id="bare-then-specific",
         ),
     ],
 )
-def test_main_when_two_pymaxlines_directives_on_same_line_does_report_duplicate(
-    tmp_path: Path, line: str
+def test_main_when_multiple_pymaxlines_segments_on_same_line_does_report_error(
+    tmp_path: Path, line: str, expected_msg: str
 ) -> None:
     content = line + CODE_LINE * 5
     file = write_module(tmp_path, content)
@@ -933,4 +915,4 @@ def test_main_when_two_pymaxlines_directives_on_same_line_does_report_duplicate(
     exit_code, lines = run_check(file)
 
     assert exit_code == 1
-    assert lines == [diagnostic(1, _DUPLICATE_MSG)]
+    assert lines == [diagnostic(1, expected_msg)]

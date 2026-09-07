@@ -5,26 +5,29 @@ from __future__ import annotations
 import ast
 import sys
 from dataclasses import dataclass
+from itertools import groupby
 from operator import attrgetter
-from pathlib import Path
-from typing import TYPE_CHECKING, Literal, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from pymaxlines._analysis import (
-    _analysis_error,
     _finish,
+    _walk_error,
     analyze_file,
     report,
 )
 from pymaxlines._lines import (
     FUNCTION_DEF_TYPES,
+    CodeLines,
+    FunctionDefNode,
+    _headers_end,
     _node_end,
-    build_headers_by_def,
     function_code_line_count,
     span_code_line_count,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from pathlib import Path
 
     from pymaxlines._analysis import Config, FileAnalysis
 
@@ -43,31 +46,19 @@ _COMPOUND_STMT_TYPES = (
 _IMPORT_TYPES = (ast.Import, ast.ImportFrom)
 _MAX_LABEL_LEN = 40
 
-type EntryKind = Literal["function", "class", "block", "imports", "code"]
-type RunKind = Literal["import", "code"]
-
-KIND_FUNCTION: EntryKind = "function"
-KIND_CLASS: EntryKind = "class"
-KIND_BLOCK: EntryKind = "block"
-KIND_IMPORTS: EntryKind = "imports"
-KIND_CODE: EntryKind = "code"
-
-RUN_KIND_IMPORT: RunKind = "import"
-RUN_KIND_CODE: RunKind = "code"
+_RUN_LABELS: dict[str, str] = {"import": "imports", "code": "module-level code"}
 
 
 @dataclass(frozen=True, slots=True)
 class SizeEntry:
     """One node in the code-line breakdown tree."""
 
-    kind: EntryKind
     label: str
     start: int
     end: int
     code_lines: int
     limit: int | None
     children: tuple[SizeEntry, ...]
-    name: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,13 +71,22 @@ class FileSize:
     entries: tuple[SizeEntry, ...]
 
 
-def _block_label(node: ast.stmt, source_lines: Sequence[str]) -> str:
-    """Build the display label for a compound-statement block entry.
+@dataclass(frozen=True, slots=True)
+class _BuildContext:
+    """Read-only state threaded through the entry-building recursion."""
 
-    Returns the first physical line of the statement stripped of leading
-    whitespace, truncated to ``_MAX_LABEL_LEN`` characters with a trailing
-    ellipsis when cut.
-    """
+    code_lines: CodeLines
+    headers_end: dict[int, int]
+    source_lines: Sequence[str]
+    function_limit: int
+
+
+def _sorted_children(children: list[SizeEntry]) -> tuple[SizeEntry, ...]:
+    return tuple(sorted(children, key=attrgetter("start")))
+
+
+def _block_label(node: ast.stmt, source_lines: Sequence[str]) -> str:
+    """Truncates to ``_MAX_LABEL_LEN`` characters with a trailing ellipsis."""
     line_idx = node.lineno - 1
     raw = source_lines[line_idx].strip() if line_idx < len(source_lines) else ""
     if len(raw) > _MAX_LABEL_LEN:
@@ -94,142 +94,123 @@ def _block_label(node: ast.stmt, source_lines: Sequence[str]) -> str:
     return raw
 
 
-def _decorated_start(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> int:
+def _compound_bodies(node: ast.stmt) -> list[list[ast.stmt]]:
+    bodies = [b for a in ("body", "orelse", "finalbody") if (b := getattr(node, a, None))]
+    bodies += [h.body for h in getattr(node, "handlers", ())]
+    bodies += [c.body for c in getattr(node, "cases", ())]
+    return bodies
+
+
+def _has_nested_defs(node: ast.stmt) -> bool:
+    """Return True if *node* contains any function or class definition."""
+    return any(
+        isinstance(n, (*FUNCTION_DEF_TYPES, ast.ClassDef)) for n in ast.walk(node) if n is not node
+    )
+
+
+def _decorated_start(node: FunctionDefNode | ast.ClassDef) -> int:
     """Return the line a def/class starts on, including any decorators."""
     if node.decorator_list:
         return min(d.lineno for d in node.decorator_list)
     return node.lineno
 
 
-def _nested_children(
-    body: list[ast.stmt],
-    code_lines: set[int] | frozenset[int],
-    headers_by_def: dict[int, frozenset[int]],
-    source_lines: Sequence[str],
-    function_limit: int,
-) -> list[SizeEntry]:
-    """Build SizeEntry children for nested function and class definitions in a body."""
+def _compound_children(node: ast.stmt, ctx: _BuildContext) -> list[SizeEntry]:
     children: list[SizeEntry] = []
-    for child in body:
-        if isinstance(child, FUNCTION_DEF_TYPES):
-            children.append(
-                _function_entry(child, code_lines, headers_by_def, source_lines, function_limit)
-            )
-        elif isinstance(child, ast.ClassDef):
-            children.append(
-                _class_entry(child, code_lines, headers_by_def, source_lines, function_limit)
-            )
+    for sub_body in _compound_bodies(node):
+        children.extend(_nested_children(sub_body, ctx))
     return children
 
 
-def _block_entries(
-    node: ast.FunctionDef | ast.AsyncFunctionDef,
-    code_lines: set[int] | frozenset[int],
-    source_lines: Sequence[str],
-) -> list[SizeEntry]:
-    """Build block SizeEntry children for the compound statements in *node*'s body."""
-    entries: list[SizeEntry] = []
-    for child in node.body:
-        if not isinstance(child, _COMPOUND_STMT_TYPES):
-            continue
-        block_end = _node_end(child)
-        block_count = span_code_line_count(child.lineno, block_end, code_lines)
-        entries.append(
-            SizeEntry(
-                kind=KIND_BLOCK,
-                label=_block_label(child, source_lines),
-                start=child.lineno,
-                end=block_end,
-                code_lines=block_count,
-                limit=None,
-                children=(),
-            )
-        )
-    return entries
+def _nested_children(body: list[ast.stmt], ctx: _BuildContext) -> list[SizeEntry]:
+    """Recurse into compound statements (``if``, ``try``, ``with``, etc.).
+
+    Definitions hidden inside them are surfaced as child entries.
+    """
+    children: list[SizeEntry] = []
+    for child in body:
+        if isinstance(child, FUNCTION_DEF_TYPES):
+            children.append(_function_entry(child, ctx))
+        elif isinstance(child, ast.ClassDef):
+            children.append(_class_entry(child, ctx))
+        elif isinstance(child, _COMPOUND_STMT_TYPES):
+            children.extend(_compound_children(child, ctx))
+    return children
 
 
-def _function_entry(
-    node: ast.FunctionDef | ast.AsyncFunctionDef,
-    code_lines: set[int] | frozenset[int],
-    headers_by_def: dict[int, frozenset[int]],
-    source_lines: Sequence[str],
-    function_limit: int,
-) -> SizeEntry:
-    """Build a SizeEntry for a function node, with nested children and optional blocks."""
+def _compound_entry(node: ast.stmt, ctx: _BuildContext) -> SizeEntry:
     end = _node_end(node)
-    count = function_code_line_count(node, code_lines, headers_by_def)
+    return SizeEntry(
+        label=_block_label(node, ctx.source_lines),
+        start=node.lineno,
+        end=end,
+        code_lines=span_code_line_count(node.lineno, end, ctx.code_lines),
+        limit=None,
+        children=_sorted_children(_compound_children(node, ctx)),
+    )
+
+
+def _block_entries(node: FunctionDefNode, ctx: _BuildContext) -> list[SizeEntry]:
+    return [
+        _compound_entry(child, ctx)
+        for child in node.body
+        if isinstance(child, _COMPOUND_STMT_TYPES)
+    ]
+
+
+def _function_entry(node: FunctionDefNode, ctx: _BuildContext) -> SizeEntry:
+    end = _node_end(node)
+    count = function_code_line_count(node, ctx.code_lines, ctx.headers_end)
     prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
     label = f"{prefix} {node.name}"
-    limit: int | None = function_limit if function_limit > 0 else None
+    limit: int | None = ctx.function_limit if ctx.function_limit > 0 else None
 
-    children = _nested_children(node.body, code_lines, headers_by_def, source_lines, function_limit)
+    children = _nested_children(node.body, ctx)
 
-    if function_limit > 0 and count > function_limit:
-        children.extend(_block_entries(node, code_lines, source_lines))
+    if ctx.function_limit > 0 and count > ctx.function_limit:
+        children.extend(_block_entries(node, ctx))
 
     start = _decorated_start(node)
 
     return SizeEntry(
-        kind=KIND_FUNCTION,
         label=label,
         start=start,
         end=end,
         code_lines=count,
         limit=limit,
-        children=tuple(sorted(children, key=attrgetter("start"))),
-        name=node.name,
+        children=_sorted_children(children),
     )
 
 
-def _class_entry(
-    node: ast.ClassDef,
-    code_lines: set[int] | frozenset[int],
-    headers_by_def: dict[int, frozenset[int]],
-    source_lines: Sequence[str],
-    function_limit: int,
-) -> SizeEntry:
-    """Build a SizeEntry for a class node with nested function and class children."""
+def _class_entry(node: ast.ClassDef, ctx: _BuildContext) -> SizeEntry:
     start = _decorated_start(node)
     end = _node_end(node)
-    count = span_code_line_count(start, end, code_lines)
+    count = span_code_line_count(start, end, ctx.code_lines)
 
-    children = _nested_children(node.body, code_lines, headers_by_def, source_lines, function_limit)
+    children = _nested_children(node.body, ctx)
 
     return SizeEntry(
-        kind=KIND_CLASS,
         label=f"class {node.name}",
         start=start,
         end=end,
         code_lines=count,
         limit=None,
-        children=tuple(sorted(children, key=attrgetter("start"))),
-        name=node.name,
+        children=_sorted_children(children),
     )
 
 
 def _run_entry(
     run: list[ast.stmt],
-    run_kind: RunKind,
-    code_lines: set[int] | frozenset[int],
+    label: str,
+    code_lines: CodeLines,
 ) -> SizeEntry | None:
-    """Build a SizeEntry for a consecutive run of imports or module-level code.
-
-    Returns ``None`` when the run spans zero code lines.
-    """
-    first = run[0]
-    last = run[-1]
-    start = first.lineno
-    end = _node_end(last)
+    """Returns ``None`` when the run spans zero code lines."""
+    start = run[0].lineno
+    end = _node_end(run[-1])
     count = span_code_line_count(start, end, code_lines)
     if count == 0:
         return None
-    kind, label = (
-        (KIND_IMPORTS, "imports")
-        if run_kind == RUN_KIND_IMPORT
-        else (KIND_CODE, "module-level code")
-    )
     return SizeEntry(
-        kind=kind,
         label=label,
         start=start,
         end=end,
@@ -239,63 +220,38 @@ def _run_entry(
     )
 
 
-def _def_entry(
-    stmt: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
-    code_lines: set[int] | frozenset[int],
-    headers_by_def: dict[int, frozenset[int]],
-    source_lines: Sequence[str],
-    function_limit: int,
-) -> SizeEntry:
-    """Build a SizeEntry for a top-level function or class definition."""
-    if isinstance(stmt, FUNCTION_DEF_TYPES):
-        return _function_entry(stmt, code_lines, headers_by_def, source_lines, function_limit)
-    return _class_entry(stmt, code_lines, headers_by_def, source_lines, function_limit)
+def _stmt_kind(stmt: ast.stmt) -> str:
+    """A compound statement without nested defs counts as plain code."""
+    if isinstance(stmt, _IMPORT_TYPES):
+        return "import"
+    if isinstance(stmt, (*FUNCTION_DEF_TYPES, ast.ClassDef)):
+        return "def"
+    if isinstance(stmt, _COMPOUND_STMT_TYPES) and _has_nested_defs(stmt):
+        return "compound"
+    return "code"
 
 
 def _build_entries(
     analysis: FileAnalysis,
     source_lines: Sequence[str],
 ) -> tuple[SizeEntry, ...]:
-    """Build top-level SizeEntry nodes from a file's AST and code-line data."""
-    headers_by_def = build_headers_by_def(analysis.header_ranges)
+    ctx = _BuildContext(
+        code_lines=analysis.code_lines,
+        headers_end=_headers_end(analysis.header_ranges),
+        source_lines=source_lines,
+        function_limit=analysis.function_limit,
+    )
     entries: list[SizeEntry] = []
-    run: list[ast.stmt] = []
-    run_kind: RunKind | None = None
-
-    def _flush_run() -> None:
-        if run and run_kind is not None:
-            entry = _run_entry(run, run_kind, analysis.code_lines)
+    for kind, group in groupby(analysis.tree.body, key=_stmt_kind):
+        stmts = list(group)
+        if kind == "def":
+            entries.extend(_nested_children(stmts, ctx))
+        elif kind == "compound":
+            entries.extend(_compound_entry(s, ctx) for s in stmts)
+        else:
+            entry = _run_entry(stmts, _RUN_LABELS[kind], ctx.code_lines)
             if entry is not None:
                 entries.append(entry)
-
-    def _start_run(kind: RunKind | None) -> None:
-        nonlocal run, run_kind
-        _flush_run()
-        run = []
-        run_kind = kind
-
-    for stmt in analysis.tree.body:
-        if isinstance(stmt, _IMPORT_TYPES):
-            if run_kind != RUN_KIND_IMPORT:
-                _start_run(RUN_KIND_IMPORT)
-            run.append(stmt)
-        elif isinstance(stmt, (*FUNCTION_DEF_TYPES, ast.ClassDef)):
-            _start_run(None)
-            entries.append(
-                _def_entry(
-                    stmt,
-                    analysis.code_lines,
-                    headers_by_def,
-                    source_lines,
-                    analysis.function_limit,
-                )
-            )
-        else:
-            if run_kind != RUN_KIND_CODE:
-                _start_run(RUN_KIND_CODE)
-            run.append(stmt)
-
-    _flush_run()
     return tuple(entries)
 
 
@@ -319,7 +275,6 @@ class _Row(NamedTuple):
 
 
 def _format_file(file_size: FileSize) -> str:
-    """Render a single file's breakdown to text."""
     header = f"{file_size.path}: {file_size.code_lines} code lines (limit {file_size.limit}"
     if file_size.code_lines > file_size.limit:
         header += f", over by {file_size.code_lines - file_size.limit}"
@@ -331,15 +286,12 @@ def _format_file(file_size: FileSize) -> str:
     rows: list[_Row] = []
     _collect_rows(file_size.entries, 0, rows)
 
+    prefixes = [f"{'  ' * (row.depth + 1)}{row.span}  {row.label}" for row in rows]
     count_width = max(len(row.count) for row in rows)
-    # Compute how wide the prefix (indent + span + gap + label) needs to be so
-    # the right-aligned count column lands in the same position for every row.
-    prefix_width = max(2 * (row.depth + 1) + len(row.span) + 2 + len(row.label) for row in rows)
+    prefix_width = max(len(p) for p in prefixes)
 
     lines = [header]
-    for row in rows:
-        indent = "  " * (row.depth + 1)
-        prefix = f"{indent}{row.span}  {row.label}"
+    for prefix, row in zip(prefixes, rows, strict=True):
         lines.append(f"{prefix:<{prefix_width}}  {row.count:>{count_width}}")
 
     return "\n".join(lines)
@@ -350,10 +302,9 @@ def _collect_rows(
     depth: int,
     rows: list[_Row],
 ) -> None:
-    """Flatten entries into ``_Row`` records."""
     for entry in entries:
         span = f"{entry.start}-{entry.end}"
-        if entry.kind == KIND_FUNCTION and entry.limit is not None:
+        if entry.limit is not None:
             count_str = f"{entry.code_lines}/{entry.limit}"
         else:
             count_str = str(entry.code_lines)
@@ -366,7 +317,7 @@ def _collect_file_sizes(
     files: Sequence[Path],
     config: Config,
 ) -> tuple[list[FileSize], list[str]]:
-    """Analyze every file, returning built ``FileSize`` entries sorted for display.
+    """Analyze every file and return its size breakdown.
 
     Diagnostics for unreadable/unparsable files and directive errors are
     collected alongside, in file order.
@@ -398,11 +349,7 @@ def run_sizes(
     Diagnostics for unreadable/unparsable files are collected and printed
     after all listings, followed by the ``Found N errors.`` summary.
     """
-    error_messages = [_analysis_error(Path(exc.filename), "read", exc) for exc in walk_errors]
-
-    if not files:
-        sys.stderr.write("warning: no .py files found\n")
-        return _finish(sum(report(msg) for msg in error_messages))
+    error_messages = [_walk_error(exc) for exc in walk_errors]
 
     file_sizes, analysis_errors = _collect_file_sizes(files, config)
     error_messages.extend(analysis_errors)
@@ -412,8 +359,4 @@ def run_sizes(
     if output_parts:
         sys.stdout.write("\n\n".join(output_parts) + "\n")
 
-    error_count = 0
-    for msg in error_messages:
-        error_count += report(msg)
-
-    return _finish(error_count)
+    return _finish(sum(report(msg) for msg in error_messages))

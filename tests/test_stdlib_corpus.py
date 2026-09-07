@@ -25,6 +25,24 @@ if not _ALL_STDLIB:
 
 _HUGE_LIMIT = str(10**9)
 
+_ALL_LIMITS_HUGE = [
+    "--max-lines",
+    _HUGE_LIMIT,
+    "--max-lines-test",
+    _HUGE_LIMIT,
+    "--max-lines-per-function",
+    _HUGE_LIMIT,
+    "--max-lines-per-function-test",
+    _HUGE_LIMIT,
+]
+
+_FUNCTION_LIMITS_HUGE = [
+    "--max-lines-per-function",
+    _HUGE_LIMIT,
+    "--max-lines-per-function-test",
+    _HUGE_LIMIT,
+]
+
 
 def _classify_stdlib_file(path: Path) -> str:
     """Classify *path* as ``"ok"``, ``"read"``, or ``"parse"``.
@@ -74,19 +92,7 @@ def _ids(paths: list[Path]) -> list[str]:
 
 @pytest.mark.parametrize("path", _PARSEABLE, ids=_ids(_PARSEABLE))
 def test_check_file_when_limits_above_any_file_does_emit_zero_diagnostics(path: Path) -> None:
-    exit_code, output = capture_main(
-        [
-            "--max-lines",
-            _HUGE_LIMIT,
-            "--max-lines-test",
-            _HUGE_LIMIT,
-            "--max-lines-per-function",
-            _HUGE_LIMIT,
-            "--max-lines-per-function-test",
-            _HUGE_LIMIT,
-            str(path),
-        ]
-    )
+    exit_code, output = capture_main([*_ALL_LIMITS_HUGE, str(path)])
 
     assert exit_code == 0, output
     assert output == ""
@@ -103,10 +109,7 @@ def test_check_file_when_module_limit_zero_does_report_module_diagnostic(path: P
             "--no-skip-blank-lines",
             "--no-skip-comments",
             "--no-skip-docstrings",
-            "--max-lines-per-function",
-            _HUGE_LIMIT,
-            "--max-lines-per-function-test",
-            _HUGE_LIMIT,
+            *_FUNCTION_LIMITS_HUGE,
             str(path),
         ]
     )
@@ -129,19 +132,7 @@ def test_check_file_when_module_limit_zero_does_report_module_diagnostic(path: P
 
 @pytest.mark.parametrize("path", _UNPARSABLE, ids=_ids(_UNPARSABLE))
 def test_check_file_when_file_is_unparsable_does_report_one_error(path: Path) -> None:
-    exit_code, output = capture_main(
-        [
-            "--max-lines",
-            _HUGE_LIMIT,
-            "--max-lines-test",
-            _HUGE_LIMIT,
-            "--max-lines-per-function",
-            _HUGE_LIMIT,
-            "--max-lines-per-function-test",
-            _HUGE_LIMIT,
-            str(path),
-        ]
-    )
+    exit_code, output = capture_main([*_ALL_LIMITS_HUGE, str(path)])
 
     expected_verb = "could not read" if _CLASSIFICATION[path] == "read" else "could not parse"
     assert exit_code == 1, output

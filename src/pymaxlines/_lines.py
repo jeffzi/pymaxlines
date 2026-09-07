@@ -22,14 +22,20 @@ NON_CODE_TOKENS = frozenset(
 
 # Tokens that do not make a line "code-bearing" for docstring-skip purposes.
 # A docstring line is only skippable when every token on that line falls in
-# this set — i.e. the line carries no keyword, name, operator, or number.
-_DOCSTRING_SKIP_IGNORED_TOKENS = NON_CODE_TOKENS | frozenset({tokenize.STRING, tokenize.ENCODING})
+# this set (or is a bracket OP, checked separately) — i.e. the line carries
+# no keyword, name, non-bracket operator, or number.
+_DOCSTRING_SKIP_IGNORED_TOKENS = NON_CODE_TOKENS | frozenset({tokenize.STRING})
 
-OPEN_BRACKETS = frozenset({"(", "[", "{"})
-CLOSE_BRACKETS = frozenset({")", "]", "}"})
+# Bracket OP strings that are structural noise on docstring lines (parenthesized
+# docstrings like ``("doc")``).  Checked separately because all operators share
+# the single ``OP`` token type.
+_DOCSTRING_SKIP_BRACKET_OPS = frozenset("()[]{}")
 
 FUNCTION_DEF_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef)
 DOCSTRING_CONTAINERS = (ast.Module, ast.ClassDef, *FUNCTION_DEF_TYPES)
+
+type FunctionDefNode = ast.FunctionDef | ast.AsyncFunctionDef
+type CodeLines = set[int] | frozenset[int]
 
 
 def is_docstring_stmt(stmt: ast.stmt) -> bool:
@@ -67,6 +73,14 @@ def docstring_lines(tree: ast.Module) -> set[int]:
     return lines
 
 
+def _split_source_lines(source: str) -> list[str]:
+    """Split *source* into lines, dropping the trailing empty element from a final newline."""
+    lines = source.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 @dataclass(slots=True)
 class _HeaderTracker:
     """Tracks a ``def`` header from the ``def`` keyword through its closing ``:``.
@@ -93,9 +107,9 @@ class _HeaderTracker:
             self.def_line = self.async_line or token.start[0]
             self.depth = 0
         elif self.in_header and token.type == tokenize.OP:
-            if token.string in OPEN_BRACKETS:
+            if token.string in "([{":
                 self.depth += 1
-            elif token.string in CLOSE_BRACKETS:
+            elif token.string in ")]}":
                 self.depth -= 1
             elif token.string == ":" and self.depth == 0:
                 for line in range(self.def_line, token.start[0] + 1):
@@ -135,10 +149,11 @@ def scan_tokens(source: str) -> TokenScan:
     ``:`` at zero bracket depth to the ``def`` line number, so directive
     placement can be checked without AST end-position heuristics.
 
-    ``code_bearing_lines`` collects the lines carrying a token outside
-    ``_DOCSTRING_SKIP_IGNORED_TOKENS`` (i.e. excluding strings too), so
-    ``code_line_numbers`` can tell a bare docstring line from one that also
-    carries code without re-tokenizing the source.
+    ``code_bearing_lines`` collects lines carrying a token outside
+    ``_DOCSTRING_SKIP_IGNORED_TOKENS`` and not a bracket OP (see
+    ``_DOCSTRING_SKIP_BRACKET_OPS``), so ``code_line_numbers`` can tell a bare
+    docstring line — including parenthesized forms like ``("doc")`` — from one
+    that also carries code, without re-tokenizing the source.
     """
     comment_lines: set[int] = set()
     non_comment_token_lines: set[int] = set()
@@ -160,7 +175,9 @@ def scan_tokens(source: str) -> TokenScan:
             at_logical_line_start = False
             non_comment_token_lines.update(range(token.start[0], token.end[0] + 1))
 
-        if token.type not in _DOCSTRING_SKIP_IGNORED_TOKENS:
+        if token.type not in _DOCSTRING_SKIP_IGNORED_TOKENS and not (
+            token.type == tokenize.OP and token.string in _DOCSTRING_SKIP_BRACKET_OPS
+        ):
             code_bearing_lines.update(range(token.start[0], token.end[0] + 1))
 
         header.feed(token)
@@ -174,38 +191,33 @@ def scan_tokens(source: str) -> TokenScan:
     )
 
 
-def code_line_numbers(
+def code_line_numbers(  # noqa: PLR0913 — three keyword-only skip flags form a cohesive set
     source: str,
     tree: ast.Module,
     scan: TokenScan,
     *,
     skip_blank_lines: bool,
+    skip_comments: bool,
     skip_docstrings: bool,
 ) -> set[int]:
     """Return the set of 1-indexed line numbers counted as code.
 
     Blank lines, comment-only lines, and docstring lines are optionally
-    excluded.  Comment-only lines are taken from *scan*; callers that do
-    not want to skip comments pass a scan with an empty
-    ``comment_only_lines``.  A docstring line is only skipped when it
-    carries no other code token on the same line (e.g. a closing
-    delimiter followed by an assignment is kept) — determined by
-    ``scan.code_bearing_lines``.
+    excluded.  A docstring line is only skipped when it carries no other
+    code token on the same line (e.g. a closing delimiter followed by an
+    assignment is kept) — determined by ``scan.code_bearing_lines``.
     """
-    lines = source.split("\n")
-    if lines[-1] == "":
-        lines.pop()
-    all_line_numbers = set(range(1, len(lines) + 1))
+    lines = _split_source_lines(source)
 
     skip: set[int] = set()
     if skip_blank_lines:
         skip.update(i for i, line in enumerate(lines, 1) if not line.strip())
-    skip.update(scan.comment_only_lines)
+    if skip_comments:
+        skip.update(scan.comment_only_lines)
     if skip_docstrings:
-        ds_lines = docstring_lines(tree)
-        skip.update(ds_lines - scan.code_bearing_lines)
+        skip.update(docstring_lines(tree) - scan.code_bearing_lines)
 
-    return all_line_numbers - skip
+    return set(range(1, len(lines) + 1)) - skip
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,32 +230,32 @@ class OversizedFunction:
     end_lineno: int
 
 
-def build_headers_by_def(header_ranges: Mapping[int, int]) -> dict[int, frozenset[int]]:
-    """Group *header_ranges* by def line, returning ``{def_line: frozenset(header_lines)}``."""
-    by_def: dict[int, set[int]] = {}
+def _headers_end(header_ranges: Mapping[int, int]) -> dict[int, int]:
+    """Map each def line to the last line of its header."""
+    result: dict[int, int] = {}
     for line, def_line in header_ranges.items():
-        by_def.setdefault(def_line, set()).add(line)
-    return {def_line: frozenset(lines) for def_line, lines in by_def.items()}
+        if def_line not in result or line > result[def_line]:
+            result[def_line] = line
+    return result
 
 
-def span_code_line_count(start: int, end: int, code_lines: set[int] | frozenset[int]) -> int:
+def span_code_line_count(start: int, end: int, code_lines: CodeLines) -> int:
     """Return the number of *code_lines* in the closed interval ``[start, end]``."""
     return sum(1 for number in code_lines if start <= number <= end)
 
 
 def function_code_line_count(
-    node: ast.FunctionDef | ast.AsyncFunctionDef,
-    code_lines: set[int] | frozenset[int],
-    headers_by_def: dict[int, frozenset[int]],
+    node: FunctionDefNode,
+    code_lines: CodeLines,
+    headers_end: dict[int, int],
 ) -> int:
     """Return the code-line count for *node*, excluding header lines before the body."""
     end = _node_end(node)
     body_start = node.body[0].lineno
-    header_only = {
-        line for line in headers_by_def.get(node.lineno, frozenset()) if line < body_start
-    }
-    return sum(
-        1 for number in code_lines if node.lineno <= number <= end and number not in header_only
+    last_header = headers_end.get(node.lineno, node.lineno)
+    header_cutoff = min(last_header, body_start - 1)
+    return span_code_line_count(node.lineno, end, code_lines) - span_code_line_count(
+        node.lineno, header_cutoff, code_lines
     )
 
 
@@ -268,7 +280,7 @@ def oversized_functions(
     is in *exempt_lines* are skipped entirely.  Results are sorted by line
     number.
     """
-    headers_by_def = build_headers_by_def(header_ranges)
+    ends = _headers_end(header_ranges)
 
     oversized: list[OversizedFunction] = []
     for node in ast.walk(tree):
@@ -276,7 +288,7 @@ def oversized_functions(
             continue
         if node.lineno in exempt_lines:
             continue
-        count = function_code_line_count(node, code_lines, headers_by_def)
+        count = function_code_line_count(node, code_lines, ends)
         if count > limit:
             oversized.append(OversizedFunction(node.name, node.lineno, count, _node_end(node)))
     oversized.sort(key=attrgetter("lineno"))

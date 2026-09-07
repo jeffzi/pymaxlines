@@ -14,9 +14,8 @@ from typing import TYPE_CHECKING, Any
 
 from pymaxlines._analysis import (
     Config,
-    _analysis_error,
-    _file_diagnostic,
     _finish,
+    _walk_error,
     analyze_file,
     report,
 )
@@ -26,6 +25,7 @@ from pymaxlines._directives import (
     MAX_LINES_RULE,
     RULES_DISABLING_FILE,
     RULES_DISABLING_FUNCTIONS,
+    UNUSED_DISABLE_DIRECTIVE_RULE,
     DirectiveResult,
     diagnostic,
 )
@@ -36,11 +36,9 @@ from pymaxlines._sizes import run_sizes
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-DESCRIPTION = "Fail when a Python file or function exceeds a code-line limit."
 PACKAGE_NAME = "pymaxlines"
 
 
-UNUSED_DISABLE_DIRECTIVE_RULE = "unused-disable-directive"
 UNUSED_MSG = (
     "unused pymaxlines-disable directive (no findings were reported) "
     f"[{UNUSED_DISABLE_DIRECTIVE_RULE}]"
@@ -90,8 +88,9 @@ def check_file(path: Path, config: Config) -> int:
     file_exceeds = len(analysis.code_lines) > analysis.file_limit
     if not analysis.directives.skip_file_check and file_exceeds:
         count += report(
-            _file_diagnostic(
+            diagnostic(
                 path,
+                1,
                 "Too many lines in module"
                 f" ({len(analysis.code_lines)} > {analysis.file_limit}) [{MAX_LINES_RULE}]",
             )
@@ -133,15 +132,16 @@ def _add_config_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=None,
-        dest="config",
         help="path to pyproject.toml (default: pyproject.toml in the working directory)",
     )
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI's ArgumentParser with the full flag set (defaults only — no config applied)."""
-    parser = argparse.ArgumentParser(prog=PACKAGE_NAME, description=DESCRIPTION)
+    parser = argparse.ArgumentParser(
+        prog=PACKAGE_NAME,
+        description="Fail when a Python file or function exceeds a code-line limit.",
+    )
     parser.add_argument(
         "-v",
         "--version",
@@ -152,7 +152,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--show-sizes",
         action="store_true",
-        default=False,
         help=(
             "print a code-line breakdown of every file instead of checking limits;"
             " blank, comment, and docstring lines are excluded according to the --skip-* flags"
@@ -170,8 +169,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--exclude",
         action="append",
-        default=None,
-        dest="exclude",
         help="glob pattern to exclude from discovery (repeatable; replaces config list)",
     )
     return parser
@@ -186,10 +183,8 @@ def parse_args(argv: Sequence[str]) -> Config:
 
     config_parser = argparse.ArgumentParser(prog=PACKAGE_NAME, add_help=False)
     _add_config_flag(config_parser)
-    config_parser.add_argument("-h", "--help", action="store_true", default=False, dest="help")
-    config_parser.add_argument(
-        "-v", "--version", action="store_true", default=False, dest="version"
-    )
+    config_parser.add_argument("-h", "--help", action="store_true")
+    config_parser.add_argument("-v", "--version", action="store_true")
     config_ns, _ = config_parser.parse_known_args(argv)
 
     if config_ns.help or config_ns.version:
@@ -228,7 +223,12 @@ def _silence_broken_stdout() -> None:
     when flushing stdout. Only redirect when stdout is actually a pipe
     (FIFO); when the error originates from a higher-level wrapper the fd
     itself is fine.
+
+    When fd 1 is closed before the process starts, ``sys.stdout`` is ``None``
+    and there is no fd to redirect — silently return.
     """
+    if sys.stdout is None:
+        return
     # The process is already exiting on a broken pipe; a failed redirect changes nothing.
     with contextlib.suppress(OSError, ValueError):
         stdout_fd = sys.stdout.fileno()
@@ -244,21 +244,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     ``argv`` defaults to ``sys.argv[1:]`` so the function doubles as the
     console-script entry point.
     """
-    config = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        config = parse_args(sys.argv[1:] if argv is None else argv)
+    except SystemExit:
+        # --help/--version raise SystemExit(0) after writing to stdout.
+        # Silence stdout so a broken-pipe flush at shutdown does not produce
+        # "Exception ignored" noise or a non-zero exit code.
+        _silence_broken_stdout()
+        raise
+    except OSError as exc:
+        # parse_args only writes to stdout for --help/--version (argparse
+        # validation errors go to stderr), so a broken pipe here means the
+        # informational output was interrupted — exit 0 like the action would.
+        if not isinstance(exc, BrokenPipeError) and exc.errno != errno.EINVAL:
+            raise
+        _silence_broken_stdout()
+        return 0
     files, walk_errors = discover_files(
         config.files, config.exclude, force_exclude=config.force_exclude
     )
+    if not files:
+        sys.stderr.write("warning: no .py files found\n")
     try:
         if config.show_sizes:
             return run_sizes(files, walk_errors, config)
-        total = 0
-        for exc in walk_errors:
-            total += report(_analysis_error(Path(exc.filename), "read", exc))
-        if not files:
-            sys.stderr.write("warning: no .py files found\n")
-            return _finish(total)
-        for path in files:
-            total += check_file(path, config)
+        total = sum(report(_walk_error(exc)) for exc in walk_errors)
+        total += sum(check_file(path, config) for path in files)
         return _finish(total)
     except OSError as exc:
         # BrokenPipeError (EPIPE) on Unix; EINVAL on Windows when the reader

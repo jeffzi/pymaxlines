@@ -20,13 +20,9 @@ def _write_pyproject(tmp_path: Path, toml_body: str) -> Path:
     return path
 
 
-def _project_with_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, toml_body: str, *, code_lines: int = 1
-) -> Path:
+def _project_with_config(tmp_path: Path, toml_body: str, *, code_lines: int = 1) -> Path:
     _write_pyproject(tmp_path, toml_body)
-    file = write_code_lines(tmp_path, code_lines)
-    monkeypatch.chdir(tmp_path)
-    return file
+    return write_code_lines(tmp_path, code_lines)
 
 
 # ---------------------------------------------------------------------------
@@ -34,12 +30,9 @@ def _project_with_config(
 # ---------------------------------------------------------------------------
 
 
-def test_load_config_when_cwd_has_pyproject_with_higher_limit_does_pass(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_load_config_when_cwd_has_pyproject_with_higher_limit_does_pass(tmp_path: Path) -> None:
     file = _project_with_config(
         tmp_path,
-        monkeypatch,
         """\
         [tool.pymaxlines]
         max-lines = 9999
@@ -52,14 +45,11 @@ def test_load_config_when_cwd_has_pyproject_with_higher_limit_does_pass(
     assert exit_code == 0
 
 
-def test_load_config_when_cwd_has_pyproject_with_lower_limit_does_fail(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_load_config_when_cwd_has_pyproject_with_lower_limit_does_fail(tmp_path: Path) -> None:
     configured_limit = 5
     line_count = configured_limit + 1
     file = _project_with_config(
         tmp_path,
-        monkeypatch,
         f"""\
         [tool.pymaxlines]
         max-lines = {configured_limit}
@@ -79,12 +69,9 @@ def test_load_config_when_cwd_has_pyproject_with_lower_limit_does_fail(
 # ---------------------------------------------------------------------------
 
 
-def test_load_config_when_cli_flag_overrides_config_does_use_flag_value(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_load_config_when_cli_flag_overrides_config_does_use_flag_value(tmp_path: Path) -> None:
     file = _project_with_config(
         tmp_path,
-        monkeypatch,
         """\
         [tool.pymaxlines]
         max-lines = 5
@@ -97,12 +84,9 @@ def test_load_config_when_cli_flag_overrides_config_does_use_flag_value(
     assert exit_code == 0
 
 
-def test_load_config_when_key_absent_from_config_does_keep_builtin_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_load_config_when_key_absent_from_config_does_keep_builtin_default(tmp_path: Path) -> None:
     file = _project_with_config(
         tmp_path,
-        monkeypatch,
         """\
         [tool.pymaxlines]
         skip-blank-lines = true
@@ -120,11 +104,8 @@ def test_load_config_when_key_absent_from_config_does_keep_builtin_default(
 # ---------------------------------------------------------------------------
 
 
-def test_load_config_when_no_pyproject_in_cwd_does_use_builtin_defaults(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_load_config_when_no_pyproject_in_cwd_does_use_builtin_defaults(tmp_path: Path) -> None:
     file = write_code_lines(tmp_path, MAX_LINES_SRC)
-    monkeypatch.chdir(tmp_path)
 
     exit_code = main([str(file)])
 
@@ -132,11 +113,10 @@ def test_load_config_when_no_pyproject_in_cwd_does_use_builtin_defaults(
 
 
 def test_load_config_when_pyproject_has_no_tool_table_does_use_builtin_defaults(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     file = _project_with_config(
         tmp_path,
-        monkeypatch,
         """\
         [project]
         name = "something"
@@ -154,9 +134,7 @@ def test_load_config_when_pyproject_has_no_tool_table_does_use_builtin_defaults(
 # ---------------------------------------------------------------------------
 
 
-def test_load_config_when_config_flag_given_does_read_from_that_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_load_config_when_config_flag_given_does_read_from_that_path(tmp_path: Path) -> None:
     config_dir = tmp_path / "elsewhere"
     config_dir.mkdir()
     config_path = _write_pyproject(
@@ -167,7 +145,6 @@ def test_load_config_when_config_flag_given_does_read_from_that_path(
     """,
     )
     file = write_code_lines(tmp_path, MAX_LINES_SRC + 1)
-    monkeypatch.chdir(tmp_path)
 
     exit_code = main(["--config", str(config_path), str(file)])
 
@@ -175,10 +152,9 @@ def test_load_config_when_config_flag_given_does_read_from_that_path(
 
 
 def test_load_config_when_config_flag_has_no_value_does_exit_two_with_program_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     file = write_code_lines(tmp_path, 1)
-    monkeypatch.chdir(tmp_path)
 
     expect_exit_two([str(file), "--config"])
 
@@ -197,9 +173,8 @@ def test_load_config_when_config_flag_has_no_value_does_exit_two_with_program_na
         pytest.param(True, "bad.toml", "[invalid toml content\n", id="config-path-is-invalid-toml"),
     ],
 )
-def test_load_config_when_config_source_is_bad_does_exit_two(  # noqa: PLR0913, PLR0917 — parametrize fixtures
+def test_load_config_when_config_source_is_bad_does_exit_two(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     explicit: bool,
     filename: str,
@@ -213,7 +188,6 @@ def test_load_config_when_config_source_is_bad_does_exit_two(  # noqa: PLR0913, 
     elif isinstance(payload, str):
         config_path.write_text(payload)
     file = write_code_lines(tmp_path, 1)
-    monkeypatch.chdir(tmp_path)
     argv = ["--config", str(config_path), str(file)] if explicit else [str(file)]
 
     expect_exit_two(argv)
@@ -244,12 +218,11 @@ def test_load_config_when_config_source_is_bad_does_exit_two(  # noqa: PLR0913, 
 )
 def test_load_config_when_key_is_not_table_does_exit_two(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     toml_body: str,
     expected_key: str,
 ) -> None:
-    file = _project_with_config(tmp_path, monkeypatch, toml_body)
+    file = _project_with_config(tmp_path, toml_body)
 
     expect_exit_two([str(file)])
 
@@ -263,12 +236,9 @@ def test_load_config_when_key_is_not_table_does_exit_two(
 # ---------------------------------------------------------------------------
 
 
-def test_load_config_when_unknown_key_in_table_does_exit_two(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_load_config_when_unknown_key_in_table_does_exit_two(tmp_path: Path) -> None:
     file = _project_with_config(
         tmp_path,
-        monkeypatch,
         """\
         [tool.pymaxlines]
         bogus-key = 42
@@ -294,11 +264,10 @@ def test_load_config_when_unknown_key_in_table_does_exit_two(
     ],
 )
 def test_load_config_when_value_has_wrong_type_does_exit_two(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, value: str
+    tmp_path: Path, key: str, value: str
 ) -> None:
     file = _project_with_config(
         tmp_path,
-        monkeypatch,
         f"""\
         [tool.pymaxlines]
         {key} = {value}
@@ -312,7 +281,6 @@ def test_load_config_when_value_has_wrong_type_does_exit_two(
 # Behavior 7: negative limit in table exits 2
 # ---------------------------------------------------------------------------
 
-
 _LIMIT_KEY_PARAMS = [
     pytest.param("max-lines", id="max-lines"),
     pytest.param("max-lines-test", id="max-lines-test"),
@@ -324,13 +292,11 @@ _LIMIT_KEY_PARAMS = [
 @pytest.mark.parametrize("key", _LIMIT_KEY_PARAMS)
 def test_load_config_when_negative_limit_in_table_does_exit_two_with_config_message(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     key: str,
 ) -> None:
     file = _project_with_config(
         tmp_path,
-        monkeypatch,
         f"""\
         [tool.pymaxlines]
         {key} = -1
@@ -344,12 +310,9 @@ def test_load_config_when_negative_limit_in_table_does_exit_two_with_config_mess
 
 
 @pytest.mark.parametrize("key", _LIMIT_KEY_PARAMS)
-def test_load_config_when_zero_limit_in_table_does_accept_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str
-) -> None:
+def test_load_config_when_zero_limit_in_table_does_accept_it(tmp_path: Path, key: str) -> None:
     file = _project_with_config(
         tmp_path,
-        monkeypatch,
         f"""\
         [tool.pymaxlines]
         {key} = 0
@@ -367,12 +330,9 @@ def test_load_config_when_zero_limit_in_table_does_accept_it(
 # ---------------------------------------------------------------------------
 
 
-def test_load_config_when_exclude_is_valid_list_does_not_alter_limits(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_load_config_when_exclude_is_valid_list_does_not_alter_limits(tmp_path: Path) -> None:
     file = _project_with_config(
         tmp_path,
-        monkeypatch,
         """\
         [tool.pymaxlines]
         exclude = ["*.generated.py"]
@@ -391,11 +351,10 @@ def test_load_config_when_exclude_is_valid_list_does_not_alter_limits(
 
 
 def test_load_config_when_force_exclude_true_in_config_does_apply_exclude_to_explicit_paths(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     _project_with_config(
         tmp_path,
-        monkeypatch,
         """\
         [tool.pymaxlines]
         force-exclude = true
@@ -411,11 +370,10 @@ def test_load_config_when_force_exclude_true_in_config_does_apply_exclude_to_exp
 
 
 def test_load_config_when_no_force_exclude_cli_overrides_config_true_does_check_explicit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     _project_with_config(
         tmp_path,
-        monkeypatch,
         """\
         [tool.pymaxlines]
         force-exclude = true
